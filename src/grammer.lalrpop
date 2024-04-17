@@ -1,0 +1,23 @@
+use std::str::FromStr;
+use crate::ast::AST;
+grammar;
+
+pub Module={
+    Function
+};
+
+Function: Box<AST> = {"fn " <s:Identifier> "(" <l: Comma<Pair>> ")" => Box::new(AST::Function(s.to_string(),l, Vec::new()))}
+
+Pair:(String, String) = {<l:Identifier> <r:Identifier> => (l,r)}
+
+Identifier: String= {r"[a-zA-Z]+[0-9]*" => <>.to_string()};
+
+Comma<T>: Vec<T> = { // (1)
+    <mut v:(<T> r",?")*> <e:T?> => match e { // (2)
+        None => v,
+        Some(e) => {
+            v.push(e);
+            v
+        }
+    }
+};
