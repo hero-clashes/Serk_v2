@@ -1,16 +1,17 @@
 use std::str::FromStr;
 use crate::ast::AST;
+use crate::ast::Statement;
 grammar;
 
 pub Module={
     Function
 };
 
-Function: Box<AST> = {"fn " <s:Identifier> "(" <l: Comma<Pair>> ")" => Box::new(AST::Function(s.to_string(),l, Vec::new()))}
+Function: Box<AST> = {"fn " <s:Identifier> "(" <l: Comma<Pair>> ")" "{" <m:Statements> "}" => Box::new(AST::Function(s.to_string(),l, m))}
 
 Pair:(String, String) = {<l:Identifier> <r:Identifier> => (l,r)}
 
-Identifier: String= {r"[a-zA-Z]+[0-9]*" => <>.to_string()};
+Identifier: String= {r"[_a-zA-Z][_0-9a-zA-Z]*" => <>.to_string()};
 
 Comma<T>: Vec<T> = { // (1)
     <mut v:(<T> r",?")*> <e:T?> => match e { // (2)
@@ -21,3 +22,21 @@ Comma<T>: Vec<T> = { // (1)
         }
     }
 };
+
+Statements: Vec<Statement> = {
+    Statement*
+}
+
+Statement: Statement = {
+    Comment,
+    VariableDecl
+}
+
+Comment: Statement = {
+    r"//.+" => Statement::Comment{}
+}
+
+VariableDecl: Statement = {
+    <s: Pair> "=" <a:Statements> ";" => Statement::VariableDecl(s.0,s.1, Box::new(a)),
+    <s: Pair> ";" => Statement::VariableDecl(s.0,s.1, Box::new(Vec::new())),
+}
