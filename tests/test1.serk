@@ -1,5 +1,5 @@
 fn Something(i32 key,i32 some){
         //None sense Comment
-        var s:i32 = 554;
-        //var a = "asdasdad";
+        var s = 554 + 1;
+        var a = "asdasdad";
 }

@@ -66,6 +66,6 @@ Expr: Statement = {
 
 Term: Statement = {
     r"[0-9]+" => Statement::Num(i64::from_str(<>).unwrap()),
-    r#""(.+)""# => Statement::StringLet(<>.to_string()),
+    r#""(.+)""# => Statement::StringLet(<>[1..<>.len()-1].to_string()),
     "("  <Expr> ")" => <> 
 }

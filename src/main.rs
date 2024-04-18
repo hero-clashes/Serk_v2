@@ -9,9 +9,19 @@ use once_cell::unsync::Lazy;
 
 use crate::ast::Backend;
 
+use argh::FromArgs;
+#[derive(FromArgs)]
+/// The Serk Complier
+struct Input{
+    ///file to be complied/JITed
+    #[argh(option, default = "String::from(\"tests/test1.serk\")")]
+    pub file: String,
+}
+
 fn main() {
+    let cli:Input = argh::from_env();
     let mut input = String::new();
-    let _ = File::open("tests/test.serk")
+    let _ = File::open(cli.file)
         .unwrap()
         .read_to_string(&mut input);
     let output = grammer::ModuleParser::new().parse(&input);
@@ -42,5 +52,11 @@ fn main() {
     }
 }
 
+use goldentests::{ TestConfig, TestResult };
+
 #[test]
-fn tests() {}
+fn run_golden_tests() -> TestResult<()> {
+    let mut config = TestConfig::new("target/debug/Serk.exe", "tests", "// ")?;
+    config.overwrite_tests = true;
+    config.run_tests()
+}
