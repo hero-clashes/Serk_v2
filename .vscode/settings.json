@@ -1,6 +1,7 @@
 {
     "cSpell.words": [
-        "lalrpop"
+        "lalrpop",
+        "serk"
     ],
     "rust-analyzer.linkedProjects": [
         ".\\Cargo.toml"
