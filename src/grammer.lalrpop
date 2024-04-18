@@ -40,11 +40,14 @@ Comment: Statement = {
 }
 
 VariableDecl: Statement = {
-    <s: Pair> "=" <a:Statement> ";" => Statement::VariableDecl(s.0,s.1, Box::new(vec![a])),
-    <s: Pair> "=" <a:Block> ";" => Statement::VariableDecl(s.0,s.1, Box::new(a)),
-    <s: Pair> ";" => Statement::VariableDecl(s.0,s.1, Box::new(Vec::new())),
+    "var" <s: Identifier> <t:TypeDef> "=" <a:Statement> ";" => Statement::VariableDecl(s,t, Box::new(vec![a])),
+    "var" <s: Identifier> <t:TypeDef> "=" <a:Block>     ";" => Statement::VariableDecl(s,t, Box::new(a)),
+    "var" <s: Identifier> <t:TypeDef>                   ";" => Statement::VariableDecl(s,t, Box::new(Vec::new())),
 }
 
+TypeDef: Option<String> = {
+    (":" <Identifier>)? => <>
+}
 Block: Vec<Statement> = {
     "{" <m:Statements> "}" => m
 }

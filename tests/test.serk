@@ -1,5 +1,5 @@
-fn Something(any key,word some){
+fn Something(i32 key,i32 some){
         //None sense Comment
-        var s = 554;
-        var a = "asdasdad";
+        var s:i32 = 554;
+        //var a = "asdasdad";
 }
