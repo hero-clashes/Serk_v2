@@ -1,0 +1,6 @@
+fn Something(i32 key,i32 some){
+        //None sense Comment
+        var s = 554 + 1;
+        var a = "asdasdad";
+        var f = s + 1;
+}

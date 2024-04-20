@@ -32,7 +32,8 @@ Statements: Vec<Statement> = {
 Statement: Statement = {
     Comment,
     VariableDecl,
-    Expr,
+    If,
+    Assignment,
 }
 
 Comment: Statement = {
@@ -40,7 +41,7 @@ Comment: Statement = {
 }
 
 VariableDecl: Statement = {
-    "var" <s: Identifier> <t:TypeDef> "=" <a:Statement> ";" => Statement::VariableDecl(s,t, Box::new(vec![a])),
+    "var" <s: Identifier> <t:TypeDef> "=" <a:Expr> ";" => Statement::VariableDecl(s,t, Box::new(vec![a])),
     "var" <s: Identifier> <t:TypeDef> "=" <a:Block>     ";" => Statement::VariableDecl(s,t, Box::new(a)),
     "var" <s: Identifier> <t:TypeDef>                   ";" => Statement::VariableDecl(s,t, Box::new(Vec::new())),
 }
@@ -67,5 +68,23 @@ Expr: Statement = {
 Term: Statement = {
     r"[0-9]+" => Statement::Num(i64::from_str(<>).unwrap()),
     r#""(.+)""# => Statement::StringLet(<>[1..<>.len()-1].to_string()),
+    <Identifier> => Statement::Identifier(<>),
     "("  <Expr> ")" => <> 
+}
+
+
+If: Statement = {
+    "if" "(" <condition:Expr> ")" <stats: Block> <el: Else?> => Statement::If(Box::new(condition), Box::new(stats), Box::new(el.unwrap_or(Vec::new())))
+}
+Else: Vec<Statement> = {
+    "else" <Block> => <>
+}
+Return: Statement = {
+    Expr,
+    "return" <Expr> ";"=> <>,
+}
+
+Assignment: Statement = {
+    <name:Identifier> "=" <es:Block> => Statement::Assignment(name, Box::new(es)),
+    <name:Identifier> "=" <e:Expr> => Statement::Assignment(name, Box::new(vec![e])),    
 }

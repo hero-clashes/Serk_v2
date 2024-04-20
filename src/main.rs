@@ -7,14 +7,14 @@ lalrpop_mod!(pub grammer);
 use inkwell::{builder, context::Context, module::{self, Module}};
 use once_cell::unsync::Lazy;
 
-use crate::ast::Backend;
+use crate::ast::{Backend, Scope};
 
 use argh::FromArgs;
 #[derive(FromArgs)]
 /// The Serk Complier
 struct Input{
     ///file to be complied/JITed
-    #[argh(option, default = "String::from(\"tests/test1.serk\")")]
+    #[argh(option, default = "String::from(\"tests/test2.serk\")")]
     pub file: String,
 }
 
@@ -33,7 +33,7 @@ fn main() {
             let module = context.create_module("Hero");
             let builder = context.create_builder();
             
-            s.gen_code(&mut Backend{ module, context, builder });
+            s.gen_code(&mut Backend{ module, context, builder, current_scope: Scope::default() });
         }
         Err(s) => {
             println!("Error: {:?}", s);

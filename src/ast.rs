@@ -1,17 +1,59 @@
+use std::collections::HashMap;
+
 use inkwell::{
     builder::Builder,
     context::Context,
     module::Module,
     types::{BasicTypeEnum, FunctionType},
-    values::{AnyValueEnum, BasicValueEnum},
+    values::{AnyValue, AnyValueEnum, BasicValueEnum::{self, PointerValue}},
 };
 use once_cell::sync::Lazy;
 use regex::Regex;
 
+#[derive(Default)]
+pub struct Scope {
+    parent_scope: Option<Box<Scope>>,
+    defs: HashMap<String, (BasicTypeEnum<'static> , BasicValueEnum<'static>)>,
+}
+
+impl Scope {
+    fn open_scope(self) -> Self {
+        let mut new_scope = Scope::default();
+        new_scope.parent_scope = Some(Box::new(self));
+        new_scope
+    }
+
+    fn close_scope(self) -> Self {
+        *self.parent_scope.unwrap()
+    }
+
+    fn get_value(&self, name: &String) -> Option<&(BasicTypeEnum<'static> , BasicValueEnum<'static>)> {
+        let s = self.defs.get(name);
+        if s.is_some() {
+            return s;
+        } else {
+            let mut current_scope = self;
+            while current_scope.parent_scope.is_some() {
+                current_scope = current_scope.parent_scope.as_ref().unwrap();
+                let v = current_scope.defs.get(name);
+                if v.is_some() {
+                    return v;
+                }
+            }
+        }
+
+        None
+    }
+
+    fn set_value(&mut self, name: String, ty: BasicTypeEnum<'static>, value: BasicValueEnum<'static>) -> bool {
+        self.defs.insert(name, (ty,value)).is_some()
+    }
+}
 pub struct Backend {
     pub module: Module<'static>,
     pub context: &'static Context,
     pub builder: Builder<'static>,
+    pub current_scope: Scope,
 }
 
 #[derive(Debug)]
@@ -21,6 +63,10 @@ pub enum Statement {
     Math(Box<Statement>, char, Box<Statement>),
     Num(i64),
     StringLet(String),
+    If(Box<Statement>, Box<Vec<Statement>>, Box<Vec<Statement>>),
+    Return(Box<Statement>),
+    Identifier(String),
+    Assignment(String, Box<Vec<Statement>>),
 }
 static INT_TYPE: Lazy<Regex> = Lazy::new(|| Regex::new(r"[ui]([0-9]+)").unwrap());
 static FLOAT_TYPE: Lazy<Regex> = Lazy::new(|| Regex::new(r"f([0-9]+)").unwrap());
@@ -30,9 +76,10 @@ impl Statement {
         match self {
             Statement::Comment => panic!(),
             Statement::VariableDecl(n, t, s) => {
+                let ty = self.get_type(backend);
                 let alloc = backend
                     .builder
-                    .build_alloca(self.get_type(backend.context), &n)
+                    .build_alloca(ty, &n)
                     .unwrap();
 
                 match s.len() {
@@ -43,11 +90,8 @@ impl Statement {
                     }
                     _ => todo!(),
                 };
-
-                backend
-                    .builder
-                    .build_load(self.get_type(backend.context), alloc, "load")
-                    .unwrap()
+                backend.current_scope.set_value(n.to_string(), ty,PointerValue(alloc));
+                BasicValueEnum::PointerValue(alloc)
             }
             Statement::Math(l, op, r) => {
                 let l = l.get_value(backend);
@@ -92,35 +136,49 @@ impl Statement {
             Statement::StringLet(lateral) => {
                 BasicValueEnum::ArrayValue(backend.context.const_string(lateral.as_bytes(), false))
             }
+            Statement::If(cond, stats, else_stats) => todo!(),
+            Statement::Return(_) => todo!(),
+            Statement::Identifier(name) => {
+                let (ty, mut val) = *backend.current_scope.get_value(name).unwrap();
+                if !ty.is_pointer_type() && val.get_type().is_pointer_type() {
+                    val = backend.builder.build_load(ty, val.into_pointer_value(), "load").unwrap();
+                }
+                val
+            },
+            Statement::Assignment(_, _) => todo!(),
         }
     }
 
-    pub fn get_type(&self, context: &'static Context) -> BasicTypeEnum<'static> {
+    pub fn get_type(&self, backend: &mut Backend) -> BasicTypeEnum<'static> {
         match self {
             Statement::Comment => panic!("Comment don't have type"),
             Statement::VariableDecl(_, ty, assignments) => {
                 //TODO infer the type form the assignments
                 match ty {
-                    Some(s) => Self::convert_type(s.clone(), context),
+                    Some(s) => Self::convert_type(s.clone(), backend.context),
                     None => match assignments.len() {
-                        0=>panic!(),
-                        1 => assignments[0].get_type(context),
+                        0 => panic!(),
+                        1 => assignments[0].get_type(backend),
                         _ => panic!(),
                     },
                 }
             }
             Statement::Math(l, op, r) => {
-                let get_type = l.get_type(context);
-                if get_type == r.get_type(context) {
+                let get_type = l.get_type(backend);
+                if get_type == r.get_type(backend) {
                     get_type
                 } else {
                     panic!()
                 }
-            },
-            Statement::Num(_) => BasicTypeEnum::IntType(context.i64_type()),
-            Statement::StringLet(s) => BasicTypeEnum::ArrayType(
-                context.i8_type().array_type(s.len() as u32),
-            ),
+            }
+            Statement::Num(_) => BasicTypeEnum::IntType(backend.context.i64_type()),
+            Statement::StringLet(s) => {
+                BasicTypeEnum::ArrayType(backend.context.i8_type().array_type(s.len() as u32))
+            }
+            Statement::If(cond, stats, else_stats) => todo!(),
+            Statement::Return(_) => todo!(),
+            Statement::Identifier(idenf) => backend.current_scope.get_value(idenf).unwrap().0,
+            Statement::Assignment(_, _) => todo!(),
         }
     }
 
@@ -165,6 +223,20 @@ impl Statement {
 
         panic!("Can't convert to FunctionType")
     }
+
+    fn is_returning(&self) -> bool {
+        match self {
+            Statement::Comment => todo!(),
+            Statement::VariableDecl(_, _, _) => false,
+            Statement::Math(_, _, _) => true,
+            Statement::Num(_) => true,
+            Statement::StringLet(_) => true,
+            Statement::If(_, _, _) => todo!(),
+            Statement::Return(_) => true,
+            Statement::Identifier(_) => todo!(),
+            Statement::Assignment(_, _) => todo!(),
+        }
+    }
 }
 #[derive(Debug)]
 pub enum AST {
@@ -190,7 +262,11 @@ impl AST {
 
                 backend.builder.build_return(None).unwrap();
             }
-            AST::Module(l) => todo!(),
+            AST::Module(l) => {
+                for ast in l {
+                    ast.gen_code(backend)
+                }
+            }
         }
         backend.module.print_to_stderr();
     }
