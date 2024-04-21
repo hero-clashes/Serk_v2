@@ -1,24 +1,50 @@
-use std::collections::HashMap;
+use core::panic;
+use std::{collections::HashMap, default, mem::transmute, rc::Rc};
 
 use inkwell::{
     builder::Builder,
     context::Context,
     module::Module,
-    types::{BasicTypeEnum, FunctionType},
-    values::{AnyValue, AnyValueEnum, BasicValueEnum::{self, PointerValue}},
+    types::{AnyType, BasicType, BasicTypeEnum, FunctionType},
+    values::{
+        AnyValue, AnyValueEnum,
+        BasicValueEnum::{self, PointerValue},
+        FunctionValue,
+    },
 };
 use once_cell::sync::Lazy;
 use regex::Regex;
-
+#[derive(Default)]
+pub enum ScopeType {
+    #[default]
+    Module,
+    Function(FunctionValue<'static>),
+    IF,
+    Else,
+    AssignmentBlock,
+}
+impl ScopeType {
+    fn get_function_value(&self) -> &FunctionValue {
+        match self {
+            Self::Function(a) => a,
+            _ => panic!(),
+        }
+    }
+}
 #[derive(Default)]
 pub struct Scope {
+    ty: ScopeType,
     parent_scope: Option<Box<Scope>>,
-    defs: HashMap<String, (BasicTypeEnum<'static> , BasicValueEnum<'static>)>,
+    defs: HashMap<String, (BasicTypeEnum<'static>, BasicValueEnum<'static>)>,
+    types: HashMap<String, BasicTypeEnum<'static>>,
 }
 
 impl Scope {
-    fn open_scope(self) -> Self {
-        let mut new_scope = Scope::default();
+    fn open_scope(self, ty: ScopeType) -> Self {
+        let mut new_scope = Scope {
+            ty,
+            ..Default::default()
+        };
         new_scope.parent_scope = Some(Box::new(self));
         new_scope
     }
@@ -27,7 +53,10 @@ impl Scope {
         *self.parent_scope.unwrap()
     }
 
-    fn get_value(&self, name: &String) -> Option<&(BasicTypeEnum<'static> , BasicValueEnum<'static>)> {
+    fn get_value(
+        &self,
+        name: &String,
+    ) -> Option<&(BasicTypeEnum<'static>, BasicValueEnum<'static>)> {
         let s = self.defs.get(name);
         if s.is_some() {
             return s;
@@ -45,8 +74,13 @@ impl Scope {
         None
     }
 
-    fn set_value(&mut self, name: String, ty: BasicTypeEnum<'static>, value: BasicValueEnum<'static>) -> bool {
-        self.defs.insert(name, (ty,value)).is_some()
+    fn set_value(
+        &mut self,
+        name: String,
+        ty: BasicTypeEnum<'static>,
+        value: BasicValueEnum<'static>,
+    ) -> bool {
+        self.defs.insert(name, (ty, value)).is_some()
     }
 }
 pub struct Backend {
@@ -59,14 +93,14 @@ pub struct Backend {
 #[derive(Debug)]
 pub enum Statement {
     Comment,
-    VariableDecl(String, Option<String>, Box<Vec<Statement>>),
+    VariableDecl(String, Option<String>, Vec<Statement>),
     Math(Box<Statement>, char, Box<Statement>),
     Num(i64),
     StringLet(String),
-    If(Box<Statement>, Box<Vec<Statement>>, Box<Vec<Statement>>),
+    If(Box<Statement>, Vec<Statement>, Vec<Statement>),
     Return(Box<Statement>),
     Identifier(String),
-    Assignment(String, Box<Vec<Statement>>),
+    Assignment(String, Vec<Statement>),
 }
 static INT_TYPE: Lazy<Regex> = Lazy::new(|| Regex::new(r"[ui]([0-9]+)").unwrap());
 static FLOAT_TYPE: Lazy<Regex> = Lazy::new(|| Regex::new(r"f([0-9]+)").unwrap());
@@ -77,10 +111,7 @@ impl Statement {
             Statement::Comment => panic!(),
             Statement::VariableDecl(n, t, s) => {
                 let ty = self.get_type(backend);
-                let alloc = backend
-                    .builder
-                    .build_alloca(ty, &n)
-                    .unwrap();
+                let alloc = backend.builder.build_alloca(ty, &n).unwrap();
 
                 match s.len() {
                     0 => {}
@@ -90,7 +121,9 @@ impl Statement {
                     }
                     _ => todo!(),
                 };
-                backend.current_scope.set_value(n.to_string(), ty,PointerValue(alloc));
+                backend
+                    .current_scope
+                    .set_value(n.to_string(), ty, PointerValue(alloc));
                 BasicValueEnum::PointerValue(alloc)
             }
             Statement::Math(l, op, r) => {
@@ -136,16 +169,57 @@ impl Statement {
             Statement::StringLet(lateral) => {
                 BasicValueEnum::ArrayValue(backend.context.const_string(lateral.as_bytes(), false))
             }
-            Statement::If(cond, stats, else_stats) => todo!(),
-            Statement::Return(_) => todo!(),
+            Statement::If(cond, stats, else_stats) => {
+                let cond = cond.get_value(backend);
+
+                let function = backend.current_scope.ty.get_function_value();
+                let then_block = backend.context.append_basic_block(*function, "if_then");
+                let else_block = backend.context.append_basic_block(*function, "if_else");
+                let after_block = backend.context.append_basic_block(*function, "if_after");
+
+                backend.builder.build_conditional_branch(
+                    cond.into_int_value(),
+                    then_block,
+                    else_block,
+                ).unwrap();
+
+                backend.builder.position_at_end(then_block);
+                for s in stats {
+                    s.get_value(backend);
+                }
+                backend.builder.build_unconditional_branch(after_block);
+
+                backend.builder.position_at_end(else_block);
+                for s in else_stats {
+                    s.get_value(backend);
+                }
+                backend.builder.build_unconditional_branch(after_block);
+
+                backend.builder.position_at_end(after_block);
+
+                panic!();
+            }
+            Statement::Return(s) => {
+                let get_value = s.get_value(backend);
+                backend
+                    .builder
+                    .build_return(Some(&get_value))
+                    .unwrap();
+                panic!();
+            }
             Statement::Identifier(name) => {
                 let (ty, mut val) = *backend.current_scope.get_value(name).unwrap();
                 if !ty.is_pointer_type() && val.get_type().is_pointer_type() {
-                    val = backend.builder.build_load(ty, val.into_pointer_value(), "load").unwrap();
+                    val = backend
+                        .builder
+                        .build_load(ty, val.into_pointer_value(), "load")
+                        .unwrap();
                 }
                 val
-            },
-            Statement::Assignment(_, _) => todo!(),
+            }
+            Statement::Assignment(name, s) => {
+                panic!();
+            }
         }
     }
 
@@ -153,15 +227,41 @@ impl Statement {
         match self {
             Statement::Comment => panic!("Comment don't have type"),
             Statement::VariableDecl(_, ty, assignments) => {
-                //TODO infer the type form the assignments
-                match ty {
-                    Some(s) => Self::convert_type(s.clone(), backend.context),
-                    None => match assignments.len() {
-                        0 => panic!(),
-                        1 => assignments[0].get_type(backend),
-                        _ => panic!(),
-                    },
+                let def_ty = if let Some(t) = ty {
+                    Some(Self::convert_type(t.clone(), backend.context))
+                } else {
+                    None
+                };
+
+                let assign_ty = match assignments.len() {
+                    0 => panic!(),
+                    1 => assignments[0].get_type(backend),
+                    _ => {
+                        let mut ty = None;
+                        for s in assignments {
+                            if s.is_returning() {
+                                if ty.is_some() {
+                                    let other_ty = s.get_type(backend);
+                                    if ty.unwrap() != other_ty {
+                                        panic!("all parts of block should return the same type");
+                                    }
+                                } else {
+                                    ty = Some(s.get_type(backend));
+                                }
+                            }
+                        }
+                        ty.unwrap()
+                    }
+                };
+
+                if let Some(t) = def_ty {
+                    if t == assign_ty {
+                        return t;
+                    } else {
+                        panic!();
+                    }
                 }
+                assign_ty
             }
             Statement::Math(l, op, r) => {
                 let get_type = l.get_type(backend);
@@ -189,7 +289,16 @@ impl Statement {
             ));
         }
 
-        // if ty == "()" {return  context.void_type()};
+        if let Some(c) = FLOAT_TYPE.captures(&ty) {
+            match c.get(1).unwrap().as_str() {
+                "f16" => return BasicTypeEnum::FloatType(context.f16_type()),
+                "f32" => return BasicTypeEnum::FloatType(context.f32_type()),
+                "f64" => return BasicTypeEnum::FloatType(context.f64_type()),
+                "f128" => return BasicTypeEnum::FloatType(context.f128_type()),
+                _ => panic!(),
+            }
+        }
+
         panic!("Can't Find Type {ty}");
     }
 
@@ -198,19 +307,6 @@ impl Statement {
         args: &Vec<(String, String)>,
         backend: &mut Backend,
     ) -> FunctionType<'static> {
-        if let Some(c) = INT_TYPE.captures(&ty) {
-            return backend
-                .context
-                .custom_width_int_type(u32::from_str_radix(c.get(1).unwrap().as_str(), 10).unwrap())
-                .fn_type(
-                    &args
-                        .into_iter()
-                        .map(|a| Statement::convert_type(a.0.to_string(), backend.context).into())
-                        .collect::<Vec<_>>(),
-                    false,
-                );
-        }
-
         if ty == "()" {
             return backend.context.void_type().fn_type(
                 &args
@@ -219,22 +315,44 @@ impl Statement {
                     .collect::<Vec<_>>(),
                 false,
             );
+        } else {
+            return Self::convert_type(ty.to_string(), backend.context)
+                .fn_type(
+                    &args
+                        .into_iter()
+                        .map(|a| Statement::convert_type(a.0.to_string(), backend.context).into())
+                        .collect::<Vec<_>>(),
+                    false,
+                );
         }
-
-        panic!("Can't convert to FunctionType")
     }
 
     fn is_returning(&self) -> bool {
         match self {
-            Statement::Comment => todo!(),
+            Statement::Comment => false,
             Statement::VariableDecl(_, _, _) => false,
             Statement::Math(_, _, _) => true,
             Statement::Num(_) => true,
             Statement::StringLet(_) => true,
-            Statement::If(_, _, _) => todo!(),
+            Statement::If(_, b, e) => {
+                let mut returning_b = false;
+                for s in b {
+                    if s.is_returning() {
+                        returning_b = true
+                    }
+                }
+                let mut returning_e = false;
+                for s in e {
+                    if s.is_returning() {
+                        returning_e = true
+                    }
+                }
+                assert!(returning_b && returning_e);
+                returning_b && returning_e
+            }
             Statement::Return(_) => true,
-            Statement::Identifier(_) => todo!(),
-            Statement::Assignment(_, _) => todo!(),
+            Statement::Identifier(_) => true,
+            Statement::Assignment(_, _) => false,
         }
     }
 }
@@ -253,6 +371,7 @@ impl AST {
                 let basic_block = backend.context.append_basic_block(func, "entry");
                 backend.builder.position_at_end(basic_block);
 
+                backend.current_scope.open_scope(ScopeType::Function(func));
                 for stat in stats {
                     if let Statement::Comment {} = stat {
                     } else {

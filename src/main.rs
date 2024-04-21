@@ -4,7 +4,11 @@ use std::{fs::File, io::Read};
 use lalrpop_util::{lalrpop_mod, state_machine::ParseError};
 
 lalrpop_mod!(pub grammer);
-use inkwell::{builder, context::Context, module::{self, Module}};
+use inkwell::{
+    builder,
+    context::Context,
+    module::{self, Module},
+};
 use once_cell::unsync::Lazy;
 
 use crate::ast::{Backend, Scope};
@@ -12,18 +16,16 @@ use crate::ast::{Backend, Scope};
 use argh::FromArgs;
 #[derive(FromArgs)]
 /// The Serk Complier
-struct Input{
+struct Input {
     ///file to be complied/JITed
-    #[argh(option, default = "String::from(\"tests/test2.serk\")")]
+    #[argh(option, default = "String::from(\"tests/test3.serk\")")]
     pub file: String,
 }
 
 fn main() {
-    let cli:Input = argh::from_env();
+    let cli: Input = argh::from_env();
     let mut input = String::new();
-    let _ = File::open(cli.file)
-        .unwrap()
-        .read_to_string(&mut input);
+    let _ = File::open(cli.file).unwrap().read_to_string(&mut input);
     let output = grammer::ModuleParser::new().parse(&input);
     match output {
         Ok(s) => {
@@ -32,8 +34,13 @@ fn main() {
                 unsafe { std::mem::transmute(Box::leak(Box::new(Context::create()))) };
             let module = context.create_module("Hero");
             let builder = context.create_builder();
-            
-            s.gen_code(&mut Backend{ module, context, builder, current_scope: Scope::default() });
+
+            s.gen_code(&mut Backend {
+                module,
+                context,
+                builder,
+                current_scope: Scope::default(),
+            });
         }
         Err(s) => {
             println!("Error: {:?}", s);
@@ -52,7 +59,7 @@ fn main() {
     }
 }
 
-use goldentests::{ TestConfig, TestResult };
+use goldentests::{TestConfig, TestResult};
 
 #[test]
 fn run_golden_tests() -> TestResult<()> {
