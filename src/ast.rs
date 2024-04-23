@@ -7,8 +7,7 @@ use inkwell::{
     module::Module,
     types::{BasicType, BasicTypeEnum, FunctionType},
     values::{
-        BasicValueEnum::{self, PointerValue},
-        FunctionValue,
+        AsValueRef, BasicValueEnum::{self, PointerValue}, FunctionValue
     },
 };
 use once_cell::sync::Lazy;
@@ -20,10 +19,10 @@ pub enum ScopeType<'ctx> {
     Function(FunctionValue<'ctx>),
     IF,
     Else,
-    AssignmentBlock,
+    AssignmentBlock(String),
 }
-impl ScopeType<'_> {
-    fn get_function_value(&self) -> &FunctionValue {
+impl<'ctx> ScopeType<'ctx> {
+    fn get_function_value(&self) -> &'ctx FunctionValue {
         match self {
             Self::Function(a) => a,
             _ => panic!(),
@@ -111,88 +110,118 @@ pub struct Backend<'a, 'ctx> {
 }
 
 impl<'a, 'ctx> Backend<'a, 'ctx> {
-    pub fn get_value(&self, stat: &Statement) -> BasicValueEnum<'ctx> {
+    pub fn get_value(&self, stat: &Statement) -> Option<BasicValueEnum<'ctx>> {
         match stat {
             Statement::Comment => panic!(),
             Statement::VariableDecl(n, t, s) => {
-                let ty = self.get_type(&stat);
+                let ty = self.get_type(&stat).unwrap();
                 let alloc = self.builder.build_alloca(ty, &n).unwrap();
 
-                let value = self.get_value(&s);
+                let value = self.get_value(&s).unwrap();
                 self.builder.build_store(alloc, value).unwrap();
 
                 self.current_scope
                     .borrow_mut()
                     .set_value(n.to_string(), ty, PointerValue(alloc));
-                BasicValueEnum::PointerValue(alloc)
+                Some(BasicValueEnum::PointerValue(alloc))
             }
             Statement::Math(l, op, r) => {
-                let l = self.get_value(l);
-                let r = self.get_value(r);
+                let l = self.get_value(l).unwrap();
+                let r = self.get_value(r).unwrap();
                 match op {
-                    '+' => BasicValueEnum::IntValue(
+                    '+' => Some(BasicValueEnum::IntValue(
                         self.builder
                             .build_int_add(l.into_int_value(), r.into_int_value(), "Adding")
                             .unwrap(),
-                    ),
-                    '-' => BasicValueEnum::IntValue(
+                    )),
+                    '-' => Some(BasicValueEnum::IntValue(
                         self.builder
-                            .build_int_sub(l.into_int_value(), r.into_int_value(), "Adding")
+                            .build_int_sub(l.into_int_value(), r.into_int_value(), "Subbing")
                             .unwrap(),
-                    ),
-                    '/' => BasicValueEnum::IntValue(
+                    )),
+                    '/' => Some(BasicValueEnum::IntValue(
                         self.builder
-                            .build_int_signed_div(l.into_int_value(), r.into_int_value(), "Adding")
+                            .build_int_signed_div(l.into_int_value(), r.into_int_value(), "Dividing")
                             .unwrap(),
-                    ),
-                    '*' => BasicValueEnum::IntValue(
+                    )),
+                    '*' => Some(BasicValueEnum::IntValue(
                         self.builder
-                            .build_int_mul(l.into_int_value(), r.into_int_value(), "Adding")
+                            .build_int_mul(l.into_int_value(), r.into_int_value(), "Multiplying")
                             .unwrap(),
-                    ),
-                    '%' => BasicValueEnum::IntValue(
+                    )),
+                    '%' => Some(BasicValueEnum::IntValue(
                         self.builder
-                            .build_int_signed_rem(l.into_int_value(), r.into_int_value(), "Adding")
+                            .build_int_signed_rem(l.into_int_value(), r.into_int_value(), "Reminder")
                             .unwrap(),
-                    ),
+                    )),
+                    'e' => Some(BasicValueEnum::IntValue(
+                        self.builder
+                            .build_int_compare(inkwell::IntPredicate::EQ,l.into_int_value(), r.into_int_value(), "Comparing")
+                            .unwrap(),
+                    )),
                     _ => todo!(),
                 }
             }
             Statement::Num(n) => {
-                BasicValueEnum::IntValue(self.context.i64_type().const_int(*n as u64, true))
+                Some(BasicValueEnum::IntValue(self.context.i64_type().const_int(*n as u64, true)))
             }
             Statement::StringLet(lateral) => {
-                BasicValueEnum::ArrayValue(self.context.const_string(lateral.as_bytes(), false))
+                Some(BasicValueEnum::ArrayValue(self.context.const_string(lateral.as_bytes(), false)))
             }
             Statement::If(cond, stats, else_stats) => {
-                let cond = self.get_value(cond);
+                let cond = self.get_value(cond).unwrap();
 
                 let borrow_mut = self.current_scope.borrow_mut();
-                let function = borrow_mut.ty.get_function_value();
-                let then_block = self.context.append_basic_block(*function, "if_then");
-                let else_block = self.context.append_basic_block(*function, "if_else");
-                let after_block = self.context.append_basic_block(*function, "if_after");
-
+                let function = unsafe { FunctionValue::new(borrow_mut.ty.get_function_value().as_value_ref()).unwrap() };
+                drop(borrow_mut);
+                let then_block = self.context.append_basic_block(function, "if_then");
+                let else_block = self.context.append_basic_block(function, "if_else");
+                let after_block = self.context.append_basic_block(function, "if_after");
                 self.builder
                     .build_conditional_branch(cond.into_int_value(), then_block, else_block)
                     .unwrap();
 
                 self.builder.position_at_end(then_block);
+                self.current_scope.replace(
+                    self.current_scope
+                        .take()
+                        .open_scope(ScopeType::IF),
+                );
                 self.get_value(stats);
-                self.builder.build_unconditional_branch(after_block);
+                self.current_scope.replace(
+                    self.current_scope.take().close_scope()
+                );
+                self.builder.build_unconditional_branch(after_block).unwrap();
 
                 self.builder.position_at_end(else_block);
+                self.current_scope.replace(
+                    self.current_scope
+                        .take()
+                        .open_scope(ScopeType::Else),
+                );
                 self.get_value(else_stats);
-                self.builder.build_unconditional_branch(after_block);
+                self.current_scope.replace(
+                    self.current_scope.take().close_scope()
+                );
+                self.builder.build_unconditional_branch(after_block).unwrap();
 
                 self.builder.position_at_end(after_block);
 
-                panic!();
+                None
             }
             Statement::Return(s) => {
-                let get_value = self.get_value(s);
-                self.builder.build_return(Some(&get_value)).unwrap();
-                panic!();
+                let get_value = self.get_value(s).unwrap();
+
+                if matches!(self.current_scope.borrow_mut().ty, ScopeType::Function(_)){
+                    self.builder.build_return(Some(&get_value)).unwrap();
+                }else if self.current_scope.borrow_mut().parent_scope.as_ref().is_some() {
+                    match &self.current_scope.borrow_mut().parent_scope.as_ref().unwrap().ty{
+                        ScopeType::AssignmentBlock(s) => {self.builder.build_store(self.current_scope.borrow_mut().get_value(&s).unwrap().1.into_pointer_value(), get_value).unwrap();},
+                        _ => {}
+                    };
+
+                }
+                None
             }
             Statement::Identifier(name) => {
                 let (ty, mut val) = *self.current_scope.borrow_mut().get_value(&name).unwrap();
@@ -202,78 +231,100 @@ impl<'a, 'ctx> Backend<'a, 'ctx> {
                         .build_load(ty, val.into_pointer_value(), "load")
                         .unwrap();
                 }
-                val
+                Some(val)
             }
             Statement::Assignment(name, s) => {
-                panic!();
+                self.current_scope.replace(
+                    self.current_scope
+                        .take()
+                        .open_scope(ScopeType::AssignmentBlock(name.clone())),
+                );
+                if let Some(val) = self.get_value(s){
+                    self.builder.build_store(self.current_scope.borrow_mut().get_value(&name).unwrap().1.into_pointer_value(), val).unwrap();
+                };
+                self.current_scope.replace(
+                    self.current_scope.take().close_scope()
+                );
+                None
             }
-            Statement::Block(_) => todo!(),
+            Statement::Block(stats) => {
+                if stats.len() == 1{
+                    return self.get_value(&stats[0])
+                }
+
+                for stat in stats{
+                    self.get_value(stat);
+                }
+
+                None
+            },
         }
     }
 
-    pub fn get_type(&self, stat: &Statement) -> BasicTypeEnum<'ctx> {
+    pub fn get_type(&self, stat: &Statement) -> Option<BasicTypeEnum<'ctx>> {
         match stat {
             Statement::Comment => panic!("Comment don't have type"),
             Statement::VariableDecl(_, ty, assignments) => {
                 let def_ty = if let Some(t) = ty {
-                    Some(Self::convert_type(t.clone(), self.context))
+                    Some(Self::convert_type(t, self.context))
                 } else {
                     None
                 };
 
-                let assign_ty = self.get_type(&assignments);
+                let assign_ty = self.get_type(&assignments).unwrap();
 
                 if let Some(t) = def_ty {
                     if t == assign_ty {
-                        return t;
+                        return Some(t);
                     } else {
                         panic!();
                     }
                 }
-                assign_ty
+                Some(assign_ty)
             }
             Statement::Math(l, op, r) => {
-                let get_type = self.get_type(l);
-                if get_type == self.get_type(r) {
-                    get_type
+                let get_type = self.get_type(l).unwrap();
+                if get_type == self.get_type(r).unwrap() {
+                    Some(get_type)
                 } else {
                     panic!()
                 }
             }
-            Statement::Num(_) => BasicTypeEnum::IntType(self.context.i64_type()),
+            Statement::Num(_) => Some(BasicTypeEnum::IntType(self.context.i64_type())),
             Statement::StringLet(s) => {
-                BasicTypeEnum::ArrayType(self.context.i8_type().array_type(s.len() as u32))
+                Some(BasicTypeEnum::ArrayType(self.context.i8_type().array_type(s.len() as u32)))
             }
             Statement::If(cond, stats, else_stats) => todo!(),
             Statement::Return(_) => todo!(),
             Statement::Identifier(idenf) => {
-                self.current_scope.borrow_mut().get_value(idenf).unwrap().0
+                Some(self.current_scope.borrow_mut().get_value(idenf).unwrap().0)
             }
             Statement::Assignment(_, _) => todo!(),
             Statement::Block(stats) => match stats.len() {
                 0 => panic!(),
-                1 => self.get_type(&stats[0]),
+                1 => Some(self.get_type(&stats[0]).unwrap()),
                 _ => {
                     let mut ty = None;
                     for s in stats {
-                        if Self::is_returning(stat) {
+                        let get_type = &self.get_type(s);
+                        if get_type.is_some() {
                             if ty.is_some() {
-                                let other_ty = self.get_type(s);
+                                let other_ty = get_type.unwrap();
                                 if ty.unwrap() != other_ty {
                                     panic!("all parts of block should return the same type");
                                 }
                             } else {
-                                ty = Some(self.get_type(s));
+                                ty = Some(self.get_type(s)).unwrap();
                             }
                         }
                     }
-                    ty.unwrap()
+                    ty
                 }
             },
         }
     }
 
-    pub fn convert_type(ty: String, context: &'ctx Context) -> BasicTypeEnum<'ctx> {
+    pub fn convert_type(ty: &String, context: &'ctx Context) -> BasicTypeEnum<'ctx> {
         if let Some(c) = INT_TYPE.captures(&ty) {
             return BasicTypeEnum::IntType(context.custom_width_int_type(
                 u32::from_str_radix(c.get(1).unwrap().as_str(), 10).unwrap(),
@@ -303,15 +354,15 @@ impl<'a, 'ctx> Backend<'a, 'ctx> {
             return self.context.void_type().fn_type(
                 &args
                     .into_iter()
-                    .map(|a| Self::convert_type(a.0.to_string(), self.context).into())
+                    .map(|a| Self::convert_type(&a.0, self.context).into())
                     .collect::<Vec<_>>(),
                 false,
             );
         } else {
-            return Self::convert_type(ty.to_string(), self.context).fn_type(
+            return Self::convert_type(ty, self.context).fn_type(
                 &args
                     .into_iter()
-                    .map(|a| Self::convert_type(a.0.to_string(), self.context).into())
+                    .map(|a| Self::convert_type(&a.0, self.context).into())
                     .collect::<Vec<_>>(),
                 false,
             );
@@ -333,10 +384,10 @@ impl<'a, 'ctx> Backend<'a, 'ctx> {
                 );
                 for (i, arg) in args.iter().enumerate() {
                     let param = func.get_nth_param(i as u32).unwrap();
-                    let ty = Self::convert_type(arg.0, self.context);
+                    let ty = Self::convert_type(&arg.0, self.context);
                     let ass_alloca = self.builder.build_alloca(ty, &arg.1).unwrap();
-                    self.current_scope.get_mut().set_value(
-                        arg.0,
+                    self.current_scope.borrow_mut().set_value(
+                        arg.0.clone(),
                         ty,
                         BasicValueEnum::PointerValue(ass_alloca),
                     );
@@ -353,6 +404,9 @@ impl<'a, 'ctx> Backend<'a, 'ctx> {
                 {
                     self.builder.build_return(None).unwrap();
                 };
+                self.current_scope.replace(
+                    self.current_scope.take().close_scope()
+                );
             }
             AST::Module(l) => {
                 for ast in l {
