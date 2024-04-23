@@ -1,13 +1,12 @@
 use core::panic;
-use std::{cell::Cell, collections::HashMap};
+use std::{cell::RefCell, collections::HashMap};
 
 use inkwell::{
     builder::Builder,
     context::Context,
     module::Module,
-    types::{AnyType, BasicType, BasicTypeEnum, FunctionType},
+    types::{BasicType, BasicTypeEnum, FunctionType},
     values::{
-        AnyValue, AnyValueEnum,
         BasicValueEnum::{self, PointerValue},
         FunctionValue,
     },
@@ -15,15 +14,15 @@ use inkwell::{
 use once_cell::sync::Lazy;
 use regex::Regex;
 #[derive(Default)]
-pub enum ScopeType {
+pub enum ScopeType<'ctx> {
     #[default]
     Module,
-    Function(FunctionValue<'static>),
+    Function(FunctionValue<'ctx>),
     IF,
     Else,
     AssignmentBlock,
 }
-impl ScopeType {
+impl ScopeType<'_> {
     fn get_function_value(&self) -> &FunctionValue {
         match self {
             Self::Function(a) => a,
@@ -33,14 +32,14 @@ impl ScopeType {
 }
 #[derive(Default)]
 pub struct Scope<'ctx> {
-    ty: ScopeType,
+    ty: ScopeType<'ctx>,
     parent_scope: Option<Box<Scope<'ctx>>>,
     defs: HashMap<String, (BasicTypeEnum<'ctx>, BasicValueEnum<'ctx>)>,
     types: HashMap<String, BasicTypeEnum<'ctx>>,
 }
 
 impl<'ctx> Scope<'ctx> {
-    fn open_scope(self, ty: ScopeType) -> Self {
+    fn open_scope(self, ty: ScopeType<'ctx>) -> Self {
         let mut new_scope = Scope {
             ty,
             ..Default::default()
@@ -113,6 +112,7 @@ pub struct Backend<'a, 'ctx> {
     pub context: &'ctx Context,
     pub builder: &'a mut  Builder<'ctx>,
     pub module: &'a mut Module<'ctx>,
+    pub current_scope: RefCell<Scope<'ctx>>
 }
 
 
@@ -132,7 +132,7 @@ impl<'a, 'ctx> Backend<'a, 'ctx> {
                     }
                     _ => todo!(),
                 };
-                self.current_scope
+                self.current_scope.borrow_mut()
                     .set_value(n.to_string(), ty, PointerValue(alloc));
                 BasicValueEnum::PointerValue(alloc)
             }
@@ -182,7 +182,8 @@ impl<'a, 'ctx> Backend<'a, 'ctx> {
             Statement::If(cond, stats, else_stats) => {
                 let cond = self.get_value(cond);
 
-                let function = self.current_scope.ty.get_function_value();
+                let borrow_mut = self.current_scope.borrow_mut();
+                let function = borrow_mut.ty.get_function_value();
                 let then_block = self.context.append_basic_block(*function, "if_then");
                 let else_block = self.context.append_basic_block(*function, "if_else");
                 let after_block = self.context.append_basic_block(*function, "if_after");
@@ -219,7 +220,7 @@ impl<'a, 'ctx> Backend<'a, 'ctx> {
                 panic!();
             }
             Statement::Identifier(name) => {
-                let (ty, mut val) = *self.current_scope.get_value(&name).unwrap();
+                let (ty, mut val) = *self.current_scope.borrow_mut().get_value(&name).unwrap();
                 if !ty.is_pointer_type() && val.get_type().is_pointer_type() {
                     val = self
                         .builder
@@ -288,7 +289,7 @@ impl<'a, 'ctx> Backend<'a, 'ctx> {
             }
             Statement::If(cond, stats, else_stats) => todo!(),
             Statement::Return(_) => todo!(),
-            Statement::Identifier(idenf) => self.current_scope.get_value(idenf).unwrap().0,
+            Statement::Identifier(idenf) => self.current_scope.borrow_mut().get_value(idenf).unwrap().0,
             Statement::Assignment(_, _) => todo!(),
         }
     }
@@ -337,35 +338,6 @@ impl<'a, 'ctx> Backend<'a, 'ctx> {
         }
     }
 
-    fn is_returning(stat: &'a Statement) -> bool {
-        match stat {
-            Statement::Comment => false,
-            Statement::VariableDecl(_, _, _) => false,
-            Statement::Math(_, _, _) => true,
-            Statement::Num(_) => true,
-            Statement::StringLet(_) => true,
-            Statement::If(_, b, e) => {
-                let mut returning_b = false;
-                for s in b {
-                    if Self::is_returning(&s) {
-                        returning_b = true
-                    }
-                }
-                let mut returning_e = false;
-                for s in e {
-                    if Self::is_returning(&s) {
-                        returning_e = true
-                    }
-                }
-                assert!(returning_b && returning_e);
-                returning_b && returning_e
-            }
-            Statement::Return(_) => true,
-            Statement::Identifier(_) => true,
-            Statement::Assignment(_, _) => false,
-        }
-    }
-
     pub fn gen_code(&self, ast: AST) {
         match ast {
             AST::Function(name, ty, args, stats) => {
@@ -374,7 +346,7 @@ impl<'a, 'ctx> Backend<'a, 'ctx> {
                 let basic_block = self.context.append_basic_block(func, "entry");
                 self.builder.position_at_end(basic_block);
 
-                self.current_scope.open_scope(ScopeType::Function(func));
+                self.current_scope.replace(self.current_scope.take().open_scope(ScopeType::Function(func)));
                 for stat in stats {
                     if let Statement::Comment {} = stat {
                     } else {

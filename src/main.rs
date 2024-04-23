@@ -1,15 +1,12 @@
 pub mod ast;
-use std::{fs::File, io::Read};
+use std::{cell::RefCell, fs::File, io::Read};
 
-use lalrpop_util::{lalrpop_mod, state_machine::ParseError};
+use lalrpop_util::lalrpop_mod;
 
 lalrpop_mod!(pub grammer);
-use inkwell::{
-    builder,
-    context::Context,
-    module::{self, Module},
-};
-use once_cell::unsync::Lazy;
+use inkwell::
+    context::Context
+;
 
 use crate::ast::{Backend, Scope};
 
@@ -37,6 +34,7 @@ fn main() {
                 module: &mut module,
                 context: &context,
                 builder: &mut builder,
+                current_scope: RefCell::new(Scope::default())
             }.gen_code(*s);
         }
         Err(s) => {
