@@ -30,17 +30,14 @@ fn main() {
     match output {
         Ok(s) => {
             println!("{:?}", s);
-            let context: &'static Context =
-                unsafe { std::mem::transmute(Box::leak(Box::new(Context::create()))) };
-            let module = context.create_module("Hero");
-            let builder = context.create_builder();
-
-            s.gen_code(&mut Backend {
-                module,
-                context,
-                builder,
-                current_scope: Scope::default(),
-            });
+            let context = Context::create();
+            let mut module = context.create_module("Hero");
+            let mut builder = context.create_builder();
+            Backend {
+                module: &mut module,
+                context: &context,
+                builder: &mut builder,
+            }.gen_code(*s);
         }
         Err(s) => {
             println!("Error: {:?}", s);

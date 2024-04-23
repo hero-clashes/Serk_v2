@@ -1,5 +1,5 @@
 use core::panic;
-use std::{collections::HashMap, default, mem::transmute, rc::Rc};
+use std::{cell::Cell, collections::HashMap};
 
 use inkwell::{
     builder::Builder,
@@ -32,14 +32,14 @@ impl ScopeType {
     }
 }
 #[derive(Default)]
-pub struct Scope {
+pub struct Scope<'ctx> {
     ty: ScopeType,
-    parent_scope: Option<Box<Scope>>,
-    defs: HashMap<String, (BasicTypeEnum<'static>, BasicValueEnum<'static>)>,
-    types: HashMap<String, BasicTypeEnum<'static>>,
+    parent_scope: Option<Box<Scope<'ctx>>>,
+    defs: HashMap<String, (BasicTypeEnum<'ctx>, BasicValueEnum<'ctx>)>,
+    types: HashMap<String, BasicTypeEnum<'ctx>>,
 }
 
-impl Scope {
+impl<'ctx> Scope<'ctx> {
     fn open_scope(self, ty: ScopeType) -> Self {
         let mut new_scope = Scope {
             ty,
@@ -56,7 +56,7 @@ impl Scope {
     fn get_value(
         &self,
         name: &String,
-    ) -> Option<&(BasicTypeEnum<'static>, BasicValueEnum<'static>)> {
+    ) -> Option<&(BasicTypeEnum<'ctx>, BasicValueEnum<'ctx>)> {
         let s = self.defs.get(name);
         if s.is_some() {
             return s;
@@ -77,18 +77,13 @@ impl Scope {
     fn set_value(
         &mut self,
         name: String,
-        ty: BasicTypeEnum<'static>,
-        value: BasicValueEnum<'static>,
+        ty: BasicTypeEnum<'ctx>,
+        value: BasicValueEnum<'ctx>,
     ) -> bool {
         self.defs.insert(name, (ty, value)).is_some()
     }
 }
-pub struct Backend {
-    pub module: Module<'static>,
-    pub context: &'static Context,
-    pub builder: Builder<'static>,
-    pub current_scope: Scope,
-}
+
 
 #[derive(Debug)]
 pub enum Statement {
@@ -102,60 +97,75 @@ pub enum Statement {
     Identifier(String),
     Assignment(String, Vec<Statement>),
 }
+
+
+#[derive(Debug)]
+pub enum AST {
+    Module(Vec<Box<AST>>),
+    Function(String, String, Vec<(String, String)>, Vec<Statement>),
+}
+
+
 static INT_TYPE: Lazy<Regex> = Lazy::new(|| Regex::new(r"[ui]([0-9]+)").unwrap());
 static FLOAT_TYPE: Lazy<Regex> = Lazy::new(|| Regex::new(r"f([0-9]+)").unwrap());
 
-impl Statement {
-    pub fn get_value(&self, backend: &mut Backend) -> BasicValueEnum {
-        match self {
+pub struct Backend<'a, 'ctx> {
+    pub context: &'ctx Context,
+    pub builder: &'a mut  Builder<'ctx>,
+    pub module: &'a mut Module<'ctx>,
+}
+
+
+impl<'a, 'ctx> Backend<'a, 'ctx> {
+    pub fn get_value(&self, stat: &Statement) -> BasicValueEnum<'ctx> {
+        match stat {
             Statement::Comment => panic!(),
             Statement::VariableDecl(n, t, s) => {
-                let ty = self.get_type(backend);
-                let alloc = backend.builder.build_alloca(ty, &n).unwrap();
+                let ty = self.get_type(&stat);
+                let alloc = self.builder.build_alloca(ty, &n).unwrap();
 
                 match s.len() {
                     0 => {}
                     1 => {
-                        let value = s[0].get_value(backend);
-                        backend.builder.build_store(alloc, value).unwrap();
+                        let value = self.get_value(&s[0]);
+                        self.builder.build_store(alloc, value).unwrap();
                     }
                     _ => todo!(),
                 };
-                backend
-                    .current_scope
+                self.current_scope
                     .set_value(n.to_string(), ty, PointerValue(alloc));
                 BasicValueEnum::PointerValue(alloc)
             }
             Statement::Math(l, op, r) => {
-                let l = l.get_value(backend);
-                let r = r.get_value(backend);
+                let l = self.get_value(l);
+                let r = self.get_value(r);
                 match op {
                     '+' => BasicValueEnum::IntValue(
-                        backend
+                        self
                             .builder
                             .build_int_add(l.into_int_value(), r.into_int_value(), "Adding")
                             .unwrap(),
                     ),
                     '-' => BasicValueEnum::IntValue(
-                        backend
+                        self
                             .builder
                             .build_int_sub(l.into_int_value(), r.into_int_value(), "Adding")
                             .unwrap(),
                     ),
                     '/' => BasicValueEnum::IntValue(
-                        backend
+                        self
                             .builder
                             .build_int_signed_div(l.into_int_value(), r.into_int_value(), "Adding")
                             .unwrap(),
                     ),
                     '*' => BasicValueEnum::IntValue(
-                        backend
+                        self
                             .builder
                             .build_int_mul(l.into_int_value(), r.into_int_value(), "Adding")
                             .unwrap(),
                     ),
                     '%' => BasicValueEnum::IntValue(
-                        backend
+                        self
                             .builder
                             .build_int_signed_rem(l.into_int_value(), r.into_int_value(), "Adding")
                             .unwrap(),
@@ -164,53 +174,54 @@ impl Statement {
                 }
             }
             Statement::Num(n) => {
-                BasicValueEnum::IntValue(backend.context.i64_type().const_int(*n as u64, true))
+                BasicValueEnum::IntValue(self.context.i64_type().const_int(*n as u64, true))
             }
             Statement::StringLet(lateral) => {
-                BasicValueEnum::ArrayValue(backend.context.const_string(lateral.as_bytes(), false))
+                BasicValueEnum::ArrayValue(self.context.const_string(lateral.as_bytes(), false))
             }
             Statement::If(cond, stats, else_stats) => {
-                let cond = cond.get_value(backend);
+                let cond = self.get_value(cond);
 
-                let function = backend.current_scope.ty.get_function_value();
-                let then_block = backend.context.append_basic_block(*function, "if_then");
-                let else_block = backend.context.append_basic_block(*function, "if_else");
-                let after_block = backend.context.append_basic_block(*function, "if_after");
+                let function = self.current_scope.ty.get_function_value();
+                let then_block = self.context.append_basic_block(*function, "if_then");
+                let else_block = self.context.append_basic_block(*function, "if_else");
+                let after_block = self.context.append_basic_block(*function, "if_after");
 
-                backend.builder.build_conditional_branch(
+                self.builder.build_conditional_branch(
                     cond.into_int_value(),
                     then_block,
                     else_block,
                 ).unwrap();
 
-                backend.builder.position_at_end(then_block);
+                self.builder.position_at_end(then_block);
                 for s in stats {
-                    s.get_value(backend);
+                    self.get_value(s);
                 }
-                backend.builder.build_unconditional_branch(after_block);
+                self.builder.build_unconditional_branch(after_block);
 
-                backend.builder.position_at_end(else_block);
+                self.builder.position_at_end(else_block);
                 for s in else_stats {
-                    s.get_value(backend);
-                }
-                backend.builder.build_unconditional_branch(after_block);
+                     self.get_value(s);
 
-                backend.builder.position_at_end(after_block);
+                }
+                self.builder.build_unconditional_branch(after_block);
+
+                self.builder.position_at_end(after_block);
 
                 panic!();
             }
             Statement::Return(s) => {
-                let get_value = s.get_value(backend);
-                backend
+                let get_value = self.get_value(s);
+                self
                     .builder
                     .build_return(Some(&get_value))
                     .unwrap();
                 panic!();
             }
             Statement::Identifier(name) => {
-                let (ty, mut val) = *backend.current_scope.get_value(name).unwrap();
+                let (ty, mut val) = *self.current_scope.get_value(&name).unwrap();
                 if !ty.is_pointer_type() && val.get_type().is_pointer_type() {
-                    val = backend
+                    val = self
                         .builder
                         .build_load(ty, val.into_pointer_value(), "load")
                         .unwrap();
@@ -223,30 +234,30 @@ impl Statement {
         }
     }
 
-    pub fn get_type(&self, backend: &mut Backend) -> BasicTypeEnum<'static> {
-        match self {
+    pub fn get_type(&self, stat: &Statement) -> BasicTypeEnum<'ctx> {
+        match stat {
             Statement::Comment => panic!("Comment don't have type"),
             Statement::VariableDecl(_, ty, assignments) => {
                 let def_ty = if let Some(t) = ty {
-                    Some(Self::convert_type(t.clone(), backend.context))
+                    Some(Self::convert_type(t.clone(), self.context))
                 } else {
                     None
                 };
 
                 let assign_ty = match assignments.len() {
                     0 => panic!(),
-                    1 => assignments[0].get_type(backend),
+                    1 => self.get_type(&assignments[0]),
                     _ => {
                         let mut ty = None;
                         for s in assignments {
-                            if s.is_returning() {
+                            if Self::is_returning(stat) {
                                 if ty.is_some() {
-                                    let other_ty = s.get_type(backend);
+                                    let other_ty = self.get_type(s);
                                     if ty.unwrap() != other_ty {
                                         panic!("all parts of block should return the same type");
                                     }
                                 } else {
-                                    ty = Some(s.get_type(backend));
+                                    ty = Some(self.get_type(s));
                                 }
                             }
                         }
@@ -264,25 +275,25 @@ impl Statement {
                 assign_ty
             }
             Statement::Math(l, op, r) => {
-                let get_type = l.get_type(backend);
-                if get_type == r.get_type(backend) {
+                let get_type = self.get_type(l);
+                if get_type == self.get_type(r) {
                     get_type
                 } else {
                     panic!()
                 }
             }
-            Statement::Num(_) => BasicTypeEnum::IntType(backend.context.i64_type()),
+            Statement::Num(_) => BasicTypeEnum::IntType(self.context.i64_type()),
             Statement::StringLet(s) => {
-                BasicTypeEnum::ArrayType(backend.context.i8_type().array_type(s.len() as u32))
+                BasicTypeEnum::ArrayType(self.context.i8_type().array_type(s.len() as u32))
             }
             Statement::If(cond, stats, else_stats) => todo!(),
             Statement::Return(_) => todo!(),
-            Statement::Identifier(idenf) => backend.current_scope.get_value(idenf).unwrap().0,
+            Statement::Identifier(idenf) => self.current_scope.get_value(idenf).unwrap().0,
             Statement::Assignment(_, _) => todo!(),
         }
     }
 
-    pub fn convert_type(ty: String, context: &'static Context) -> BasicTypeEnum<'static> {
+    pub fn convert_type(ty: String, context: &'ctx Context) -> BasicTypeEnum<'ctx> {
         if let Some(c) = INT_TYPE.captures(&ty) {
             return BasicTypeEnum::IntType(context.custom_width_int_type(
                 u32::from_str_radix(c.get(1).unwrap().as_str(), 10).unwrap(),
@@ -302,33 +313,32 @@ impl Statement {
         panic!("Can't Find Type {ty}");
     }
 
-    pub fn convert_type_to_func(
+    pub fn convert_type_to_func(&self,
         ty: &String,
         args: &Vec<(String, String)>,
-        backend: &mut Backend,
-    ) -> FunctionType<'static> {
+    ) -> FunctionType<'ctx> {
         if ty == "()" {
-            return backend.context.void_type().fn_type(
+            return self.context.void_type().fn_type(
                 &args
                     .into_iter()
-                    .map(|a| Statement::convert_type(a.0.to_string(), backend.context).into())
+                    .map(|a| Self::convert_type(a.0.to_string(), self.context).into())
                     .collect::<Vec<_>>(),
                 false,
             );
         } else {
-            return Self::convert_type(ty.to_string(), backend.context)
+            return Self::convert_type(ty.to_string(), self.context)
                 .fn_type(
                     &args
                         .into_iter()
-                        .map(|a| Statement::convert_type(a.0.to_string(), backend.context).into())
+                        .map(|a| Self::convert_type(a.0.to_string(), self.context).into())
                         .collect::<Vec<_>>(),
                     false,
                 );
         }
     }
 
-    fn is_returning(&self) -> bool {
-        match self {
+    fn is_returning(stat: &'a Statement) -> bool {
+        match stat {
             Statement::Comment => false,
             Statement::VariableDecl(_, _, _) => false,
             Statement::Math(_, _, _) => true,
@@ -337,13 +347,13 @@ impl Statement {
             Statement::If(_, b, e) => {
                 let mut returning_b = false;
                 for s in b {
-                    if s.is_returning() {
+                    if Self::is_returning(&s) {
                         returning_b = true
                     }
                 }
                 let mut returning_e = false;
                 for s in e {
-                    if s.is_returning() {
+                    if Self::is_returning(&s) {
                         returning_e = true
                     }
                 }
@@ -355,38 +365,31 @@ impl Statement {
             Statement::Assignment(_, _) => false,
         }
     }
-}
-#[derive(Debug)]
-pub enum AST {
-    Module(Vec<Box<AST>>),
-    Function(String, String, Vec<(String, String)>, Vec<Statement>),
-}
 
-impl AST {
-    pub fn gen_code(&self, backend: &mut Backend) {
-        match self {
+    pub fn gen_code(&self, ast: AST) {
+        match ast {
             AST::Function(name, ty, args, stats) => {
-                let ty = Statement::convert_type_to_func(ty, args, backend);
-                let func = backend.module.add_function(name, ty, None);
-                let basic_block = backend.context.append_basic_block(func, "entry");
-                backend.builder.position_at_end(basic_block);
+                let ty = self.convert_type_to_func(&ty,&args);
+                let func = self.module.add_function(&name, ty, None);
+                let basic_block = self.context.append_basic_block(func, "entry");
+                self.builder.position_at_end(basic_block);
 
-                backend.current_scope.open_scope(ScopeType::Function(func));
+                self.current_scope.open_scope(ScopeType::Function(func));
                 for stat in stats {
                     if let Statement::Comment {} = stat {
                     } else {
-                        stat.get_value(backend);
+                        self.get_value(&stat);
                     }
                 }
 
-                backend.builder.build_return(None).unwrap();
+                self.builder.build_return(None).unwrap();
             }
             AST::Module(l) => {
                 for ast in l {
-                    ast.gen_code(backend)
+                    self.gen_code(*ast);
                 }
             }
         }
-        backend.module.print_to_stderr();
+        self.module.print_to_stderr();
     }
 }
