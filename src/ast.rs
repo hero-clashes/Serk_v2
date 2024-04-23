@@ -52,10 +52,7 @@ impl<'ctx> Scope<'ctx> {
         *self.parent_scope.unwrap()
     }
 
-    fn get_value(
-        &self,
-        name: &String,
-    ) -> Option<&(BasicTypeEnum<'ctx>, BasicValueEnum<'ctx>)> {
+    fn get_value(&self, name: &String) -> Option<&(BasicTypeEnum<'ctx>, BasicValueEnum<'ctx>)> {
         let s = self.defs.get(name);
         if s.is_some() {
             return s;
@@ -83,38 +80,35 @@ impl<'ctx> Scope<'ctx> {
     }
 }
 
-
 #[derive(Debug)]
 pub enum Statement {
     Comment,
-    VariableDecl(String, Option<String>, Vec<Statement>),
+    VariableDecl(String, Option<String>, Box<Statement>),
     Math(Box<Statement>, char, Box<Statement>),
     Num(i64),
     StringLet(String),
-    If(Box<Statement>, Vec<Statement>, Vec<Statement>),
+    If(Box<Statement>, Box<Statement>, Box<Statement>),
     Return(Box<Statement>),
     Identifier(String),
-    Assignment(String, Vec<Statement>),
+    Assignment(String, Box<Statement>),
+    Block(Vec<Statement>),
 }
-
 
 #[derive(Debug)]
 pub enum AST {
     Module(Vec<Box<AST>>),
-    Function(String, String, Vec<(String, String)>, Vec<Statement>),
+    Function(String, String, Vec<(String, String)>, Statement),
 }
-
 
 static INT_TYPE: Lazy<Regex> = Lazy::new(|| Regex::new(r"[ui]([0-9]+)").unwrap());
 static FLOAT_TYPE: Lazy<Regex> = Lazy::new(|| Regex::new(r"f([0-9]+)").unwrap());
 
 pub struct Backend<'a, 'ctx> {
     pub context: &'ctx Context,
-    pub builder: &'a mut  Builder<'ctx>,
+    pub builder: &'a mut Builder<'ctx>,
     pub module: &'a mut Module<'ctx>,
-    pub current_scope: RefCell<Scope<'ctx>>
+    pub current_scope: RefCell<Scope<'ctx>>,
 }
-
 
 impl<'a, 'ctx> Backend<'a, 'ctx> {
     pub fn get_value(&self, stat: &Statement) -> BasicValueEnum<'ctx> {
@@ -124,15 +118,11 @@ impl<'a, 'ctx> Backend<'a, 'ctx> {
                 let ty = self.get_type(&stat);
                 let alloc = self.builder.build_alloca(ty, &n).unwrap();
 
-                match s.len() {
-                    0 => {}
-                    1 => {
-                        let value = self.get_value(&s[0]);
-                        self.builder.build_store(alloc, value).unwrap();
-                    }
-                    _ => todo!(),
-                };
-                self.current_scope.borrow_mut()
+                let value = self.get_value(&s);
+                self.builder.build_store(alloc, value).unwrap();
+
+                self.current_scope
+                    .borrow_mut()
                     .set_value(n.to_string(), ty, PointerValue(alloc));
                 BasicValueEnum::PointerValue(alloc)
             }
@@ -141,32 +131,27 @@ impl<'a, 'ctx> Backend<'a, 'ctx> {
                 let r = self.get_value(r);
                 match op {
                     '+' => BasicValueEnum::IntValue(
-                        self
-                            .builder
+                        self.builder
                             .build_int_add(l.into_int_value(), r.into_int_value(), "Adding")
                             .unwrap(),
                     ),
                     '-' => BasicValueEnum::IntValue(
-                        self
-                            .builder
+                        self.builder
                             .build_int_sub(l.into_int_value(), r.into_int_value(), "Adding")
                             .unwrap(),
                     ),
                     '/' => BasicValueEnum::IntValue(
-                        self
-                            .builder
+                        self.builder
                             .build_int_signed_div(l.into_int_value(), r.into_int_value(), "Adding")
                             .unwrap(),
                     ),
                     '*' => BasicValueEnum::IntValue(
-                        self
-                            .builder
+                        self.builder
                             .build_int_mul(l.into_int_value(), r.into_int_value(), "Adding")
                             .unwrap(),
                     ),
                     '%' => BasicValueEnum::IntValue(
-                        self
-                            .builder
+                        self.builder
                             .build_int_signed_rem(l.into_int_value(), r.into_int_value(), "Adding")
                             .unwrap(),
                     ),
@@ -188,23 +173,16 @@ impl<'a, 'ctx> Backend<'a, 'ctx> {
                 let else_block = self.context.append_basic_block(*function, "if_else");
                 let after_block = self.context.append_basic_block(*function, "if_after");
 
-                self.builder.build_conditional_branch(
-                    cond.into_int_value(),
-                    then_block,
-                    else_block,
-                ).unwrap();
+                self.builder
+                    .build_conditional_branch(cond.into_int_value(), then_block, else_block)
+                    .unwrap();
 
                 self.builder.position_at_end(then_block);
-                for s in stats {
-                    self.get_value(s);
-                }
+                self.get_value(stats);
                 self.builder.build_unconditional_branch(after_block);
 
                 self.builder.position_at_end(else_block);
-                for s in else_stats {
-                     self.get_value(s);
-
-                }
+                self.get_value(else_stats);
                 self.builder.build_unconditional_branch(after_block);
 
                 self.builder.position_at_end(after_block);
@@ -213,10 +191,7 @@ impl<'a, 'ctx> Backend<'a, 'ctx> {
             }
             Statement::Return(s) => {
                 let get_value = self.get_value(s);
-                self
-                    .builder
-                    .build_return(Some(&get_value))
-                    .unwrap();
+                self.builder.build_return(Some(&get_value)).unwrap();
                 panic!();
             }
             Statement::Identifier(name) => {
@@ -232,6 +207,7 @@ impl<'a, 'ctx> Backend<'a, 'ctx> {
             Statement::Assignment(name, s) => {
                 panic!();
             }
+            Statement::Block(_) => todo!(),
         }
     }
 
@@ -245,26 +221,7 @@ impl<'a, 'ctx> Backend<'a, 'ctx> {
                     None
                 };
 
-                let assign_ty = match assignments.len() {
-                    0 => panic!(),
-                    1 => self.get_type(&assignments[0]),
-                    _ => {
-                        let mut ty = None;
-                        for s in assignments {
-                            if Self::is_returning(stat) {
-                                if ty.is_some() {
-                                    let other_ty = self.get_type(s);
-                                    if ty.unwrap() != other_ty {
-                                        panic!("all parts of block should return the same type");
-                                    }
-                                } else {
-                                    ty = Some(self.get_type(s));
-                                }
-                            }
-                        }
-                        ty.unwrap()
-                    }
-                };
+                let assign_ty = self.get_type(&assignments);
 
                 if let Some(t) = def_ty {
                     if t == assign_ty {
@@ -289,8 +246,30 @@ impl<'a, 'ctx> Backend<'a, 'ctx> {
             }
             Statement::If(cond, stats, else_stats) => todo!(),
             Statement::Return(_) => todo!(),
-            Statement::Identifier(idenf) => self.current_scope.borrow_mut().get_value(idenf).unwrap().0,
+            Statement::Identifier(idenf) => {
+                self.current_scope.borrow_mut().get_value(idenf).unwrap().0
+            }
             Statement::Assignment(_, _) => todo!(),
+            Statement::Block(stats) => match stats.len() {
+                0 => panic!(),
+                1 => self.get_type(&stats[0]),
+                _ => {
+                    let mut ty = None;
+                    for s in stats {
+                        if Self::is_returning(stat) {
+                            if ty.is_some() {
+                                let other_ty = self.get_type(s);
+                                if ty.unwrap() != other_ty {
+                                    panic!("all parts of block should return the same type");
+                                }
+                            } else {
+                                ty = Some(self.get_type(s));
+                            }
+                        }
+                    }
+                    ty.unwrap()
+                }
+            },
         }
     }
 
@@ -311,10 +290,12 @@ impl<'a, 'ctx> Backend<'a, 'ctx> {
             }
         }
 
+
         panic!("Can't Find Type {ty}");
     }
 
-    pub fn convert_type_to_func(&self,
+    pub fn convert_type_to_func(
+        &self,
         ty: &String,
         args: &Vec<(String, String)>,
     ) -> FunctionType<'ctx> {
@@ -327,34 +308,51 @@ impl<'a, 'ctx> Backend<'a, 'ctx> {
                 false,
             );
         } else {
-            return Self::convert_type(ty.to_string(), self.context)
-                .fn_type(
-                    &args
-                        .into_iter()
-                        .map(|a| Self::convert_type(a.0.to_string(), self.context).into())
-                        .collect::<Vec<_>>(),
-                    false,
-                );
+            return Self::convert_type(ty.to_string(), self.context).fn_type(
+                &args
+                    .into_iter()
+                    .map(|a| Self::convert_type(a.0.to_string(), self.context).into())
+                    .collect::<Vec<_>>(),
+                false,
+            );
         }
     }
 
     pub fn gen_code(&self, ast: AST) {
         match ast {
-            AST::Function(name, ty, args, stats) => {
-                let ty = self.convert_type_to_func(&ty,&args);
+            AST::Function(name, ty_name, args, stats) => {
+                let ty = self.convert_type_to_func(&ty_name, &args);
                 let func = self.module.add_function(&name, ty, None);
                 let basic_block = self.context.append_basic_block(func, "entry");
                 self.builder.position_at_end(basic_block);
 
-                self.current_scope.replace(self.current_scope.take().open_scope(ScopeType::Function(func)));
-                for stat in stats {
-                    if let Statement::Comment {} = stat {
-                    } else {
-                        self.get_value(&stat);
-                    }
+                self.current_scope.replace(
+                    self.current_scope
+                        .take()
+                        .open_scope(ScopeType::Function(func.clone())),
+                );
+                for (i, arg) in args.iter().enumerate() {
+                    let param = func.get_nth_param(i as u32).unwrap();
+                    let ty = Self::convert_type(arg.0, self.context);
+                    let ass_alloca = self.builder.build_alloca(ty, &arg.1).unwrap();
+                    self.current_scope.get_mut().set_value(
+                        arg.0,
+                        ty,
+                        BasicValueEnum::PointerValue(ass_alloca),
+                    );
                 }
 
-                self.builder.build_return(None).unwrap();
+                self.get_value(&stats);
+
+                if ty_name == "()"
+                    && func
+                        .get_last_basic_block()
+                        .unwrap()
+                        .get_terminator()
+                        .is_none()
+                {
+                    self.builder.build_return(None).unwrap();
+                };
             }
             AST::Module(l) => {
                 for ast in l {

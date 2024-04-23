@@ -41,16 +41,16 @@ Comment: Statement = {
 }
 
 VariableDecl: Statement = {
-    "var" <s: Identifier> <t:TypeDef> "=" <a:Expr> ";" => Statement::VariableDecl(s,t, vec![a]),
-    "var" <s: Identifier> <t:TypeDef> "=" <a:Block>     ";" => Statement::VariableDecl(s,t, a),
-    "var" <s: Identifier> <t:TypeDef>                   ";" => Statement::VariableDecl(s,t, Vec::new()),
+    "var" <s: Identifier> <t:TypeDef> "=" <a:Expr> ";" => Statement::VariableDecl(s,t, Box::new(Statement::Block(vec![a]))),
+    "var" <s: Identifier> <t:TypeDef> "=" <a:Block>     ";" => Statement::VariableDecl(s,t, Box::new(a)),
+    "var" <s: Identifier> <t:TypeDef>                   ";" => Statement::VariableDecl(s,t, Box::new(Statement::Block(vec![]))),
 }
 
 TypeDef: Option<String> = {
     (":" <Identifier>)? => <>
 }
-Block: Vec<Statement> = {
-    "{" <m:Statements> "}" => m
+Block: Statement = {
+    "{" <m:Statements> "}" => Statement::Block(m)
 }
 
 Expr: Statement = {
@@ -78,9 +78,9 @@ Term: Statement = {
 
 
 If: Statement = {
-    "if" "(" <condition:Expr> ")" <stats: Block> <el: Else?> => Statement::If(Box::new(condition), stats, el.unwrap_or(Vec::new()))
+    "if" "(" <condition:Expr> ")" <stats: Block> <el: Else?> => Statement::If(Box::new(condition), Box::new(stats), Box::new(el.unwrap_or(Statement::Block(vec![]))))
 }
-Else: Vec<Statement> = {
+Else: Statement = {
     "else" <Block> => <>
 }
 Return: Statement = {
@@ -89,6 +89,6 @@ Return: Statement = {
 }
 
 Assignment: Statement = {
-    <name:Identifier> "=" <es:Block> => Statement::Assignment(name, es),
-    <name:Identifier> "=" <e:Expr> => Statement::Assignment(name, vec![e]),    
+    <name:Identifier> "=" <es:Block> => Statement::Assignment(name, Box::new(es)),
+    <name:Identifier> "=" <e:Expr> => Statement::Assignment(name, Box::new(Statement::Block(vec![e]))),    
 }
