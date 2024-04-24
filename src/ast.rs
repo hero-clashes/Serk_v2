@@ -1,5 +1,5 @@
 use core::panic;
-use std::{cell::RefCell, collections::HashMap};
+use std::{cell::RefCell, collections::HashMap, mem};
 
 use inkwell::{
     builder::Builder,
@@ -7,48 +7,37 @@ use inkwell::{
     module::Module,
     types::{BasicType, BasicTypeEnum, FunctionType},
     values::{
-        AsValueRef, BasicValueEnum::{self, PointerValue}, FunctionValue
+        BasicValueEnum::{self, PointerValue},
+        FunctionValue,
     },
 };
 use once_cell::sync::Lazy;
 use regex::Regex;
 #[derive(Default)]
-pub enum ScopeType<'ctx> {
-    #[default]
-    Module,
-    Function(FunctionValue<'ctx>),
-    IF,
-    Else,
-    AssignmentBlock(String),
-}
-impl<'ctx> ScopeType<'ctx> {
-    fn get_function_value(&self) -> &'ctx FunctionValue {
-        match self {
-            Self::Function(a) => a,
-            _ => panic!(),
-        }
-    }
-}
-#[derive(Default)]
 pub struct Scope<'ctx> {
-    ty: ScopeType<'ctx>,
     parent_scope: Option<Box<Scope<'ctx>>>,
     defs: HashMap<String, (BasicTypeEnum<'ctx>, BasicValueEnum<'ctx>)>,
-    types: HashMap<String, BasicTypeEnum<'ctx>>,
+    pub current_function: Option<FunctionValue<'ctx>>,
+    pub current_assign: Option<String>,
 }
 
 impl<'ctx> Scope<'ctx> {
-    fn open_scope(self, ty: ScopeType<'ctx>) -> Self {
-        let mut new_scope = Scope {
-            ty,
-            ..Default::default()
-        };
-        new_scope.parent_scope = Some(Box::new(self));
-        new_scope
+    fn open(self: Box<Self>) -> Box<Self> {
+        let mut new_scope = Scope::default();
+        new_scope.parent_scope = Some(self);
+        Box::new(new_scope)
     }
 
-    fn close_scope(self) -> Self {
-        *self.parent_scope.unwrap()
+    fn close(self) -> Box<Self> {
+        self.parent_scope.unwrap()
+    }
+
+    fn open_scope(s: &mut Option<Box<Self>>) {
+        *s = Some(mem::take(s).unwrap().open());
+    }
+
+    fn close_scope(s: &mut Option<Box<Self>>) {
+        *s = Some(mem::take(s).unwrap().close())
     }
 
     fn get_value(&self, name: &String) -> Option<&(BasicTypeEnum<'ctx>, BasicValueEnum<'ctx>)> {
@@ -76,6 +65,39 @@ impl<'ctx> Scope<'ctx> {
         value: BasicValueEnum<'ctx>,
     ) -> bool {
         self.defs.insert(name, (ty, value)).is_some()
+    }
+
+    fn get_function(&self) -> Option<FunctionValue<'ctx>> {
+        let s = self.current_function;
+        if s.is_some() {
+            return s;
+        } else {
+            let mut current_scope = self;
+            while current_scope.parent_scope.is_some() {
+                current_scope = current_scope.parent_scope.as_ref().unwrap();
+                if current_scope.current_function.is_some() {
+                    return current_scope.current_function;
+                }
+            }
+        }
+
+        None
+    }
+    fn get_assign(&self) -> Option<String> {
+        let s = self.current_assign.clone();
+        if s.is_some() {
+            return s;
+        } else {
+            let mut current_scope = self;
+            while current_scope.parent_scope.is_some() {
+                current_scope = current_scope.parent_scope.as_ref().unwrap();
+                if current_scope.current_assign.is_some() {
+                    return current_scope.current_assign.clone();
+                }
+            }
+        }
+
+        None
     }
 }
 
@@ -106,11 +128,11 @@ pub struct Backend<'a, 'ctx> {
     pub context: &'ctx Context,
     pub builder: &'a mut Builder<'ctx>,
     pub module: &'a mut Module<'ctx>,
-    pub current_scope: RefCell<Scope<'ctx>>,
+    pub current_scope: Option<Box<Scope<'ctx>>>,
 }
 
 impl<'a, 'ctx> Backend<'a, 'ctx> {
-    pub fn get_value(&self, stat: &Statement) -> Option<BasicValueEnum<'ctx>> {
+    pub fn get_value(&mut self, stat: &Statement) -> Option<BasicValueEnum<'ctx>> {
         match stat {
             Statement::Comment => panic!(),
             Statement::VariableDecl(n, t, s) => {
@@ -120,9 +142,11 @@ impl<'a, 'ctx> Backend<'a, 'ctx> {
                 let value = self.get_value(&s).unwrap();
                 self.builder.build_store(alloc, value).unwrap();
 
-                self.current_scope
-                    .borrow_mut()
-                    .set_value(n.to_string(), ty, PointerValue(alloc));
+                self.current_scope.as_mut().unwrap().set_value(
+                    n.to_string(),
+                    ty,
+                    PointerValue(alloc),
+                );
                 Some(BasicValueEnum::PointerValue(alloc))
             }
             Statement::Math(l, op, r) => {
@@ -141,7 +165,11 @@ impl<'a, 'ctx> Backend<'a, 'ctx> {
                     )),
                     '/' => Some(BasicValueEnum::IntValue(
                         self.builder
-                            .build_int_signed_div(l.into_int_value(), r.into_int_value(), "Dividing")
+                            .build_int_signed_div(
+                                l.into_int_value(),
+                                r.into_int_value(),
+                                "Dividing",
+                            )
                             .unwrap(),
                     )),
                     '*' => Some(BasicValueEnum::IntValue(
@@ -151,29 +179,36 @@ impl<'a, 'ctx> Backend<'a, 'ctx> {
                     )),
                     '%' => Some(BasicValueEnum::IntValue(
                         self.builder
-                            .build_int_signed_rem(l.into_int_value(), r.into_int_value(), "Reminder")
+                            .build_int_signed_rem(
+                                l.into_int_value(),
+                                r.into_int_value(),
+                                "Reminder",
+                            )
                             .unwrap(),
                     )),
                     'e' => Some(BasicValueEnum::IntValue(
                         self.builder
-                            .build_int_compare(inkwell::IntPredicate::EQ,l.into_int_value(), r.into_int_value(), "Comparing")
+                            .build_int_compare(
+                                inkwell::IntPredicate::EQ,
+                                l.into_int_value(),
+                                r.into_int_value(),
+                                "Comparing",
+                            )
                             .unwrap(),
                     )),
                     _ => todo!(),
                 }
             }
-            Statement::Num(n) => {
-                Some(BasicValueEnum::IntValue(self.context.i64_type().const_int(*n as u64, true)))
-            }
-            Statement::StringLet(lateral) => {
-                Some(BasicValueEnum::ArrayValue(self.context.const_string(lateral.as_bytes(), false)))
-            }
+            Statement::Num(n) => Some(BasicValueEnum::IntValue(
+                self.context.i64_type().const_int(*n as u64, true),
+            )),
+            Statement::StringLet(lateral) => Some(BasicValueEnum::ArrayValue(
+                self.context.const_string(lateral.as_bytes(), false),
+            )),
             Statement::If(cond, stats, else_stats) => {
                 let cond = self.get_value(cond).unwrap();
 
-                let borrow_mut = self.current_scope.borrow_mut();
-                let function = unsafe { FunctionValue::new(borrow_mut.ty.get_function_value().as_value_ref()).unwrap() };
-                drop(borrow_mut);
+                let function = self.current_scope.as_ref().unwrap().get_function().unwrap();
                 let then_block = self.context.append_basic_block(function, "if_then");
                 let else_block = self.context.append_basic_block(function, "if_else");
                 let after_block = self.context.append_basic_block(function, "if_after");
@@ -182,28 +217,20 @@ impl<'a, 'ctx> Backend<'a, 'ctx> {
                     .unwrap();
 
                 self.builder.position_at_end(then_block);
-                self.current_scope.replace(
-                    self.current_scope
-                        .take()
-                        .open_scope(ScopeType::IF),
-                );
+                Scope::open_scope(&mut self.current_scope);
                 self.get_value(stats);
-                self.current_scope.replace(
-                    self.current_scope.take().close_scope()
-                );
-                self.builder.build_unconditional_branch(after_block).unwrap();
+                Scope::close_scope(&mut self.current_scope);
+                self.builder
+                    .build_unconditional_branch(after_block)
+                    .unwrap();
 
                 self.builder.position_at_end(else_block);
-                self.current_scope.replace(
-                    self.current_scope
-                        .take()
-                        .open_scope(ScopeType::Else),
-                );
+                Scope::open_scope(&mut self.current_scope);
                 self.get_value(else_stats);
-                self.current_scope.replace(
-                    self.current_scope.take().close_scope()
-                );
-                self.builder.build_unconditional_branch(after_block).unwrap();
+                Scope::close_scope(&mut self.current_scope);
+                self.builder
+                    .build_unconditional_branch(after_block)
+                    .unwrap();
 
                 self.builder.position_at_end(after_block);
 
@@ -212,19 +239,32 @@ impl<'a, 'ctx> Backend<'a, 'ctx> {
             Statement::Return(s) => {
                 let get_value = self.get_value(s).unwrap();
 
-                if matches!(self.current_scope.borrow_mut().ty, ScopeType::Function(_)){
+                let get_assign = &self.current_scope.as_ref().unwrap().get_assign();
+                if get_assign.is_none() {
                     self.builder.build_return(Some(&get_value)).unwrap();
-                }else if self.current_scope.borrow_mut().parent_scope.as_ref().is_some() {
-                    match &self.current_scope.borrow_mut().parent_scope.as_ref().unwrap().ty{
-                        ScopeType::AssignmentBlock(s) => {self.builder.build_store(self.current_scope.borrow_mut().get_value(&s).unwrap().1.into_pointer_value(), get_value).unwrap();},
-                        _ => {}
-                    };
-
+                } else {
+                    self.builder
+                        .build_store(
+                            self.current_scope
+                                .as_ref()
+                                .unwrap()
+                                .get_value(get_assign.as_ref().unwrap())
+                                .unwrap()
+                                .1
+                                .into_pointer_value(),
+                            get_value,
+                        )
+                        .unwrap();
                 }
                 None
             }
             Statement::Identifier(name) => {
-                let (ty, mut val) = *self.current_scope.borrow_mut().get_value(&name).unwrap();
+                let (ty, mut val) = *self
+                    .current_scope
+                    .as_ref()
+                    .unwrap()
+                    .get_value(&name)
+                    .unwrap();
                 if !ty.is_pointer_type() && val.get_type().is_pointer_type() {
                     val = self
                         .builder
@@ -234,30 +274,37 @@ impl<'a, 'ctx> Backend<'a, 'ctx> {
                 Some(val)
             }
             Statement::Assignment(name, s) => {
-                self.current_scope.replace(
-                    self.current_scope
-                        .take()
-                        .open_scope(ScopeType::AssignmentBlock(name.clone())),
-                );
-                if let Some(val) = self.get_value(s){
-                    self.builder.build_store(self.current_scope.borrow_mut().get_value(&name).unwrap().1.into_pointer_value(), val).unwrap();
+                Scope::open_scope(&mut self.current_scope);
+                self.current_scope.as_mut().unwrap().current_assign = Some(name.to_string());
+                if let Some(val) = self.get_value(s) {
+                    self.builder
+                        .build_store(
+                            self.current_scope
+                                .as_ref()
+                                .unwrap()
+                                .get_value(&name)
+                                .unwrap()
+                                .1
+                                .into_pointer_value(),
+                            val,
+                        )
+                        .unwrap();
                 };
-                self.current_scope.replace(
-                    self.current_scope.take().close_scope()
-                );
+                self.current_scope.as_mut().unwrap().current_assign = None;
+                Scope::close_scope(&mut self.current_scope);
                 None
             }
             Statement::Block(stats) => {
-                if stats.len() == 1{
-                    return self.get_value(&stats[0])
+                if stats.len() == 1 {
+                    return self.get_value(&stats[0]);
                 }
 
-                for stat in stats{
+                for stat in stats {
                     self.get_value(stat);
                 }
 
                 None
-            },
+            }
         }
     }
 
@@ -291,14 +338,19 @@ impl<'a, 'ctx> Backend<'a, 'ctx> {
                 }
             }
             Statement::Num(_) => Some(BasicTypeEnum::IntType(self.context.i64_type())),
-            Statement::StringLet(s) => {
-                Some(BasicTypeEnum::ArrayType(self.context.i8_type().array_type(s.len() as u32)))
-            }
+            Statement::StringLet(s) => Some(BasicTypeEnum::ArrayType(
+                self.context.i8_type().array_type(s.len() as u32),
+            )),
             Statement::If(cond, stats, else_stats) => todo!(),
             Statement::Return(_) => todo!(),
-            Statement::Identifier(idenf) => {
-                Some(self.current_scope.borrow_mut().get_value(idenf).unwrap().0)
-            }
+            Statement::Identifier(idenf) => Some(
+                self.current_scope
+                    .as_ref()
+                    .unwrap()
+                    .get_value(idenf)
+                    .unwrap()
+                    .0,
+            ),
             Statement::Assignment(_, _) => todo!(),
             Statement::Block(stats) => match stats.len() {
                 0 => panic!(),
@@ -341,7 +393,6 @@ impl<'a, 'ctx> Backend<'a, 'ctx> {
             }
         }
 
-
         panic!("Can't Find Type {ty}");
     }
 
@@ -369,7 +420,7 @@ impl<'a, 'ctx> Backend<'a, 'ctx> {
         }
     }
 
-    pub fn gen_code(&self, ast: AST) {
+    pub fn gen_code(&mut self, ast: AST) {
         match ast {
             AST::Function(name, ty_name, args, stats) => {
                 let ty = self.convert_type_to_func(&ty_name, &args);
@@ -377,20 +428,18 @@ impl<'a, 'ctx> Backend<'a, 'ctx> {
                 let basic_block = self.context.append_basic_block(func, "entry");
                 self.builder.position_at_end(basic_block);
 
-                self.current_scope.replace(
-                    self.current_scope
-                        .take()
-                        .open_scope(ScopeType::Function(func.clone())),
-                );
+                Scope::open_scope(&mut self.current_scope);
+                self.current_scope.as_mut().unwrap().current_function = Some(func);
                 for (i, arg) in args.iter().enumerate() {
                     let param = func.get_nth_param(i as u32).unwrap();
                     let ty = Self::convert_type(&arg.0, self.context);
                     let ass_alloca = self.builder.build_alloca(ty, &arg.1).unwrap();
-                    self.current_scope.borrow_mut().set_value(
+                    self.current_scope.as_mut().unwrap().set_value(
                         arg.0.clone(),
                         ty,
                         BasicValueEnum::PointerValue(ass_alloca),
                     );
+                    self.builder.build_store(ass_alloca, param).unwrap();
                 }
 
                 self.get_value(&stats);
@@ -404,9 +453,7 @@ impl<'a, 'ctx> Backend<'a, 'ctx> {
                 {
                     self.builder.build_return(None).unwrap();
                 };
-                self.current_scope.replace(
-                    self.current_scope.take().close_scope()
-                );
+                Scope::close_scope(&mut self.current_scope);
             }
             AST::Module(l) => {
                 for ast in l {

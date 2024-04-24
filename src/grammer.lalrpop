@@ -34,6 +34,8 @@ Statement: Statement = {
     VariableDecl,
     If,
     Assignment,
+    Block,
+    Return
 }
 
 Comment: Statement = {
@@ -42,7 +44,7 @@ Comment: Statement = {
 
 VariableDecl: Statement = {
     "var" <s: Identifier> <t:TypeDef> "=" <a:Expr> ";" => Statement::VariableDecl(s,t, Box::new(Statement::Block(vec![a]))),
-    "var" <s: Identifier> <t:TypeDef> "=" <a:Block>     ";" => Statement::VariableDecl(s,t, Box::new(a)),
+    "var" <s: Identifier> <t:TypeDef> "=" <a:Statement>     ";" => Statement::VariableDecl(s,t, Box::new(a)),
     "var" <s: Identifier> <t:TypeDef>                   ";" => Statement::VariableDecl(s,t, Box::new(Statement::Block(vec![]))),
 }
 
@@ -83,11 +85,10 @@ Else: Statement = {
     "else" <Block> => <>
 }
 Return: Statement = {
-    Expr,
-    //"return" <Expr> ";"=> <>,
+    "return" <Expr> ";"=> Statement::Return(Box::new(<>)),
 }
 
 Assignment: Statement = {
-    <name:Identifier> "=" <es:Block> ";" => Statement::Assignment(name, Box::new(es)),
+    <name:Identifier> "=" <es:Statement> ";" => Statement::Assignment(name, Box::new(es)),
     <name:Identifier> "=" <e:Expr>   ";"  => Statement::Assignment(name, Box::new(Statement::Block(vec![e]))),    
 }

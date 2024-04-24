@@ -15,7 +15,7 @@ use argh::FromArgs;
 /// The Serk Complier
 struct Input {
     ///file to be complied/JITed
-    #[argh(option, default = "String::from(\"tests/test3.serk\")")]
+    #[argh(option, default = "String::from(\"tests/test4.serk\")")]
     pub file: String,
 }
 
@@ -34,7 +34,7 @@ fn main() {
                 module: &mut module,
                 context: &context,
                 builder: &mut builder,
-                current_scope: RefCell::new(Scope::default())
+                current_scope: Some(Box::new(Scope::default())),
             }.gen_code(*s);
         }
         Err(s) => {

@@ -1,0 +1,9 @@
+fn Something(i32 key,i32 some){
+        var f = 3 + 1;
+        f = if(f == 4){
+                return 7;
+        }else{
+                return 9;
+        };
+        
+}
