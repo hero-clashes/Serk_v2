@@ -61,9 +61,9 @@ Block: Statement = {
 Expr: Statement = {
     #[precedence(level="0")] 
     Term,
-    //#[precedence(level="1")] #[assoc(side="left")]
-    //"!" <e:Expr> => Statement::PreFix(c[0],e)
-    //"-" <e:Expr> => Statement::PreFix(c[0],e)
+    #[precedence(level="1")] #[assoc(side="right")]
+    "!" <e:Expr> => Statement::PreFix('!',Box::new(e)),
+    "-" <e:Expr> => Statement::PreFix('-',Box::new(e)),
     #[precedence(level="2")] #[assoc(side="left")]
     <l:Expr> "*" <r:Expr> => Statement::Math(Box::new(l),'*',Box::new(r)),
     <l:Expr> "/" <r:Expr> => Statement::Math(Box::new(l),'/',Box::new(r)),

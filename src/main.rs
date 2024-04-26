@@ -17,7 +17,7 @@ use argh::FromArgs;
 /// The Serk Complier
 struct Input {
     ///file to be complied/JITed
-    #[argh(option, default = "String::from(\"tests/test4.serk\")")]
+    #[argh(option, default = "String::from(\"tests/test5.serk\")")]
     pub file: String,
 }
 
