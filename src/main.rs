@@ -1,5 +1,6 @@
 pub mod ast;
-use std::{cell::RefCell, fs::File, io::Read};
+pub mod lexer;
+use std::fs;
 
 use lalrpop_util::lalrpop_mod;
 
@@ -7,6 +8,7 @@ lalrpop_mod!(pub grammer);
 use inkwell::
     context::Context
 ;
+use lexer::Lexer;
 
 use crate::ast::{Backend, Scope};
 
@@ -21,9 +23,8 @@ struct Input {
 
 fn main() {
     let cli: Input = argh::from_env();
-    let mut input = String::new();
-    let _ = File::open(cli.file).unwrap().read_to_string(&mut input);
-    let output = grammer::ModuleParser::new().parse(&input);
+    let input = fs::read_to_string(cli.file).unwrap();
+    let output = grammer::ModuleParser::new().parse(Lexer::new(&input));
     match output {
         Ok(s) => {
             println!("{:?}", s);
@@ -48,7 +49,7 @@ fn main() {
                     println!("{:?}", input.split_at(token.0))
                 }
                 lalrpop_util::ParseError::ExtraToken { token } => todo!(),
-                lalrpop_util::ParseError::User { error } => todo!(),
+                lalrpop_util::ParseError::User { error } => println!("{:?}",error),
             }
         }
     }

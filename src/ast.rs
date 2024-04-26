@@ -1,5 +1,5 @@
 use core::panic;
-use std::{cell::RefCell, collections::HashMap, mem};
+use std::{collections::HashMap, mem};
 
 use inkwell::{
     builder::Builder,
@@ -7,6 +7,7 @@ use inkwell::{
     module::Module,
     types::{BasicType, BasicTypeEnum, FunctionType},
     values::{
+        BasicValue,
         BasicValueEnum::{self, PointerValue},
         FunctionValue,
     },
@@ -113,6 +114,8 @@ pub enum Statement {
     Identifier(String),
     Assignment(String, Box<Statement>),
     Block(Vec<Statement>),
+    BoolLet(bool),
+    PreFix(char, Box<Statement>),
 }
 
 #[derive(Debug)]
@@ -192,7 +195,35 @@ impl<'a, 'ctx> Backend<'a, 'ctx> {
                                 inkwell::IntPredicate::EQ,
                                 l.into_int_value(),
                                 r.into_int_value(),
-                                "Comparing",
+                                "Comparing Equal",
+                            )
+                            .unwrap(),
+                    )),
+                    'n' => Some(BasicValueEnum::IntValue(
+                        self.builder
+                            .build_int_compare(
+                                inkwell::IntPredicate::NE,
+                                l.into_int_value(),
+                                r.into_int_value(),
+                                "Comparing Not Equal",
+                            )
+                            .unwrap(),
+                    )),
+                    'a' => Some(BasicValueEnum::IntValue(
+                        self.builder
+                            .build_and(
+                                l.into_int_value(),
+                                r.into_int_value(),
+                                "And",
+                            )
+                            .unwrap(),
+                    )),
+                    'o' => Some(BasicValueEnum::IntValue(
+                        self.builder
+                            .build_or(
+                                l.into_int_value(),
+                                r.into_int_value(),
+                                "Or",
                             )
                             .unwrap(),
                     )),
@@ -305,6 +336,33 @@ impl<'a, 'ctx> Backend<'a, 'ctx> {
 
                 None
             }
+            Statement::BoolLet(bool) => Some(
+                self.context
+                    .bool_type()
+                    .const_int(*bool as u64, false)
+                    .as_basic_value_enum(),
+            ),
+            Statement::PreFix(p, s) => match p {
+                '-' => {
+                    let value = self.get_value(s).unwrap().into_int_value();
+                    Some(
+                        self.builder
+                            .build_int_neg(value, "Neg")
+                            .unwrap()
+                            .as_basic_value_enum(),
+                    )
+                }
+                '!' => {
+                    let value = self.get_value(s).unwrap().into_int_value();
+                    Some(
+                        self.builder
+                            .build_not(value, "Not")
+                            .unwrap()
+                            .as_basic_value_enum(),
+                    )
+                }
+                _ => panic!(),
+            },
         }
     }
 
@@ -373,6 +431,8 @@ impl<'a, 'ctx> Backend<'a, 'ctx> {
                     ty
                 }
             },
+            Statement::BoolLet(_) => Some(self.context.bool_type().as_basic_type_enum()),
+            Statement::PreFix(_, s) => self.get_type(&s),
         }
     }
 
@@ -391,6 +451,10 @@ impl<'a, 'ctx> Backend<'a, 'ctx> {
                 "f128" => return BasicTypeEnum::FloatType(context.f128_type()),
                 _ => panic!(),
             }
+        }
+
+        if ty == "bool" {
+            return context.bool_type().as_basic_type_enum();
         }
 
         panic!("Can't Find Type {ty}");

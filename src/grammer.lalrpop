@@ -1,27 +1,34 @@
 use std::str::FromStr;
 use crate::ast::AST;
 use crate::ast::Statement;
+use crate::lexer::*;
 grammar;
 
 pub Module={
     Function
 };
 
-Function: Box<AST> = {"fn" <s:Identifier> "(" <l: Comma<Pair>> ")" "->" <t:Identifier> <m:Block> => Box::new(AST::Function(s.to_string(), t,l, m)),
-                      "fn" <s:Identifier> "(" <l: Comma<Pair>> ")" <m:Block> => Box::new(AST::Function(s.to_string(), "()".to_string() ,l, m))
+Function: Box<AST> = {"fn" <s:"Identifier"> "(" <l: Comma<Pair>> ")" "->" <t:"Identifier"> <m:Block> => Box::new(AST::Function(s, t,l, m)),
+                      "fn" <s:"Identifier"> "(" <l: Comma<Pair>> ")" <m:Block> => Box::new(AST::Function(s, "()".to_string() ,l, m))
                       }
 
-Pair:(String, String) = {<l:Identifier> <r:Identifier> => (l,r)}
+Pair:(String, String) = {<l:"Identifier"> <r:"Identifier"> => (l,r)}
 
-Identifier: String= {r"[_a-zA-Z][_0-9a-zA-Z]*" => <>.to_string()};
+#[inline]
+Comma<T>: Vec<T> = {
+    <items: (<T> ",")*> <last: T?> => {
+        let mut items = items;
+        items.extend(last);
+        items
+    }
+};
 
-Comma<T>: Vec<T> = { // (1)
-    <mut v:(<T> r",?")*> <e:T?> => match e { // (2)
-        None => v,
-        Some(e) => {
-            v.push(e);
-            v
-        }
+#[inline]
+OneOrMore<T>: Vec<T> = {
+    <i1: T> <i2:("," T)*> => {
+        let mut items = vec![i1];
+        items.extend(i2.into_iter().map(|e| e.1));
+        items
     }
 };
 
@@ -30,7 +37,6 @@ Statements: Vec<Statement> = {
 }
 
 Statement: Statement = {
-    Comment,
     VariableDecl,
     If,
     Assignment,
@@ -38,18 +44,15 @@ Statement: Statement = {
     Return
 }
 
-Comment: Statement = {
-    r"//.+" => Statement::Comment{}
-}
 
 VariableDecl: Statement = {
-    "var" <s: Identifier> <t:TypeDef> "=" <a:Expr> ";" => Statement::VariableDecl(s,t, Box::new(Statement::Block(vec![a]))),
-    "var" <s: Identifier> <t:TypeDef> "=" <a:Statement>     ";" => Statement::VariableDecl(s,t, Box::new(a)),
-    "var" <s: Identifier> <t:TypeDef>                   ";" => Statement::VariableDecl(s,t, Box::new(Statement::Block(vec![]))),
+    "var" <s: "Identifier"> <t:TypeDef> "=" <a:Expr> ";" => Statement::VariableDecl(s ,t, Box::new(Statement::Block(vec![a]))),
+    "var" <s: "Identifier"> <t:TypeDef> "=" <a:Statement>     ";" => Statement::VariableDecl(s ,t, Box::new(a)),
+    "var" <s: "Identifier"> <t:TypeDef>                   ";" => Statement::VariableDecl(s ,t, Box::new(Statement::Block(vec![]))),
 }
 
 TypeDef: Option<String> = {
-    (":" <Identifier>)? => <>
+    (":" <"Identifier">)? => <>.map(|s| s)
 }
 Block: Statement = {
     "{" <m:Statements> "}" => Statement::Block(m)
@@ -58,22 +61,31 @@ Block: Statement = {
 Expr: Statement = {
     #[precedence(level="0")] 
     Term,
-    #[precedence(level="1")] #[assoc(side="left")]
+    //#[precedence(level="1")] #[assoc(side="left")]
+    //"!" <e:Expr> => Statement::PreFix(c[0],e)
+    //"-" <e:Expr> => Statement::PreFix(c[0],e)
+    #[precedence(level="2")] #[assoc(side="left")]
     <l:Expr> "*" <r:Expr> => Statement::Math(Box::new(l),'*',Box::new(r)),
     <l:Expr> "/" <r:Expr> => Statement::Math(Box::new(l),'/',Box::new(r)),
-    #[precedence(level="2")] #[assoc(side="left")]
+    #[precedence(level="3")] #[assoc(side="left")]
     <l:Expr> "+" <r:Expr> => Statement::Math(Box::new(l),'+',Box::new(r)),
     <l:Expr> "-" <r:Expr> => Statement::Math(Box::new(l),'-',Box::new(r)),
-    <l:Expr> "==" <r:Expr> => Statement::Math(Box::new(l),'e',Box::new(r))
+    <l:Expr> "==" <r:Expr> => Statement::Math(Box::new(l),'e',Box::new(r)),
+    <l:Expr> "!=" <r:Expr> => Statement::Math(Box::new(l),'n',Box::new(r)),
+    <l:Expr> "&&" <r:Expr> => Statement::Math(Box::new(l),'a',Box::new(r)),
+    <l:Expr> "||" <r:Expr> => Statement::Math(Box::new(l),'o',Box::new(r)),
+
 }
 
 
 Term: Statement = {
     #[precedence(level="0")] 
-    r"[0-9]+" => Statement::Num(i64::from_str(<>).unwrap()),
-    r#""(.+)""# => Statement::StringLet(<>[1..<>.len()-1].to_string()),
+    "Num" => Statement::Num(<>),
+    "true"=> Statement::BoolLet(true), 
+    "false" => Statement::BoolLet(false),
+    "stringlet" => Statement::StringLet(<>),
     #[precedence(level="1")] 
-    <Identifier> => Statement::Identifier(<>),
+    "Identifier" => Statement::Identifier(<>),
     "("  <Expr> ")" => <> ,
 }
 
@@ -89,6 +101,51 @@ Return: Statement = {
 }
 
 Assignment: Statement = {
-    <name:Identifier> "=" <es:Statement> ";" => Statement::Assignment(name, Box::new(es)),
-    <name:Identifier> "=" <e:Expr>   ";"  => Statement::Assignment(name, Box::new(Statement::Block(vec![e]))),    
+    <name:"Identifier"> "=" <es:Statement> ";" => Statement::Assignment(name.to_string(), Box::new(es)),
+    <name:"Identifier"> "=" <e:Expr>   ";"  => Statement::Assignment(name.to_string(), Box::new(Statement::Block(vec![e]))),    
+}
+
+
+
+extern {
+    type Location = usize;
+    type Error = LexicalError;
+  
+    enum Token {
+        "fn" => Token::KeywordFn,
+        "var" => Token::KeywordVar,
+        "if" => Token::KeywordIf,
+        "else" => Token::KeywordElse,
+        "return" => Token::KeywordReturn,
+        "true" => Token::KeywordTrue,
+        "false" => Token::KeywordFalse,
+        "Identifier" => Token::Identifier(<String>),
+        "Num" => Token::Num(<i64>),
+        "stringlet" => Token::StringLet(<String>),
+        "(" => Token::LParen,
+        ")" => Token::RParen,
+        
+        "{" => Token::LPrace,
+        "}" => Token::RPrace,
+
+        "=" => Token::Assign,
+        ";" => Token::Semicolon,
+        "," => Token::Comma,
+        ":" => Token::Colon,
+
+        "+" => Token::Add,
+        "-" => Token::Sub,
+        "*" => Token::Mul,
+        "/" => Token::Div,
+
+        "==" => Token::Equal,
+        "!=" => Token::NotEqual,
+
+        "!" => Token::Not,
+        "&&" => Token::And,
+        "||" => Token::Or,
+        "->" => Token::Arrow,
+
+    }
+
 }

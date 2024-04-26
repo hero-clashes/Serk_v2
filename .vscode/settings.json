@@ -2,6 +2,7 @@
     "cSpell.words": [
         "alloca",
         "lalrpop",
+        "Paren",
         "serk"
     ],
     "rust-analyzer.linkedProjects": [
