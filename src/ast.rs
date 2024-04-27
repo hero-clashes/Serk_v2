@@ -2,28 +2,32 @@ use core::panic;
 use std::{collections::HashMap, mem};
 
 use inkwell::{
-    builder::Builder,
-    context::Context,
-    module::Module,
-    types::{BasicType, BasicTypeEnum, FunctionType},
-    values::{
+    basic_block::BasicBlock, builder::Builder, context::Context, module::Module, types::{BasicType, BasicTypeEnum, FunctionType}, values::{
         BasicMetadataValueEnum, BasicValue, BasicValueEnum::{self, PointerValue}, FunctionValue
-    },
+    }
 };
 use once_cell::sync::Lazy;
 use regex::Regex;
+#[derive(Default,Clone)]
+pub enum ScopeTy<'ctx>{
+    #[default]
+    Normal,
+    Function(FunctionValue<'ctx>),
+    Assign(String),
+    Loop{cond_block: BasicBlock<'ctx>, after_block: BasicBlock<'ctx>}
+}
 #[derive(Default)]
 pub struct Scope<'ctx> {
     parent_scope: Option<Box<Scope<'ctx>>>,
     defs: HashMap<String, (BasicTypeEnum<'ctx>, BasicValueEnum<'ctx>)>,
-    pub current_function: Option<FunctionValue<'ctx>>,
-    pub current_assign: Option<String>,
+    ty: ScopeTy<'ctx>,
 }
 
 impl<'ctx> Scope<'ctx> {
-    fn open(self: Box<Self>) -> Box<Self> {
+    fn open(self: Box<Self>, ty: ScopeTy<'ctx>) -> Box<Self> {
         let mut new_scope = Scope::default();
         new_scope.parent_scope = Some(self);
+        new_scope.ty = ty;
         Box::new(new_scope)
     }
 
@@ -31,8 +35,8 @@ impl<'ctx> Scope<'ctx> {
         self.parent_scope.unwrap()
     }
 
-    fn open_scope(s: &mut Option<Box<Self>>) {
-        *s = Some(mem::take(s).unwrap().open());
+    fn open_scope(s: &mut Option<Box<Self>>, ty: ScopeTy<'ctx>) {
+        *s = Some(mem::take(s).unwrap().open(ty));
     }
 
     fn close_scope(s: &mut Option<Box<Self>>) {
@@ -67,37 +71,56 @@ impl<'ctx> Scope<'ctx> {
     }
 
     fn get_function(&self) -> Option<FunctionValue<'ctx>> {
-        let s = self.current_function;
-        if s.is_some() {
-            return s;
+        let s = &self.ty;
+        if let ScopeTy::Function(f) = s {
+            return Some(f.clone());
         } else {
             let mut current_scope = self;
             while current_scope.parent_scope.is_some() {
                 current_scope = current_scope.parent_scope.as_ref().unwrap();
-                if current_scope.current_function.is_some() {
-                    return current_scope.current_function;
-                }
+                if let ScopeTy::Function(f) = current_scope.ty {
+                    return Some(f);
+                } 
             }
         }
 
         None
     }
     fn get_assign(&self) -> Option<String> {
-        let s = self.current_assign.clone();
-        if s.is_some() {
-            return s;
+        let s = &self.ty;
+        if let ScopeTy::Assign(f) = s {
+            return Some(f.to_string());
         } else {
             let mut current_scope = self;
             while current_scope.parent_scope.is_some() {
                 current_scope = current_scope.parent_scope.as_ref().unwrap();
-                if current_scope.current_assign.is_some() {
-                    return current_scope.current_assign.clone();
-                }
+                if let ScopeTy::Assign(f) = &current_scope.ty {
+                    return Some(f.to_string());
+                } 
             }
         }
 
         None
     }
+
+    fn get_while(&self) -> Option<ScopeTy> {
+        let s = &self.ty;
+        if let ScopeTy::Loop{ cond_block, after_block } = s {
+            return Some(s.clone());
+        } else {
+            let mut current_scope = self;
+            while current_scope.parent_scope.is_some() {
+                current_scope = current_scope.parent_scope.as_ref().unwrap();
+                if let ScopeTy::Assign(f) = &current_scope.ty {
+                    return Some(current_scope.ty.clone());
+                } 
+            }
+        }
+
+        None
+    }
+
+    
 }
 
 #[derive(Debug)]
@@ -288,7 +311,7 @@ impl<'a, 'ctx> Backend<'a, 'ctx> {
                     .unwrap();
 
                 self.builder.position_at_end(then_block);
-                Scope::open_scope(&mut self.current_scope);
+                Scope::open_scope(&mut self.current_scope, ScopeTy::Normal);
                 self.get_value(stats);
                 Scope::close_scope(&mut self.current_scope);
                 self.builder
@@ -296,7 +319,7 @@ impl<'a, 'ctx> Backend<'a, 'ctx> {
                     .unwrap();
 
                 self.builder.position_at_end(else_block);
-                Scope::open_scope(&mut self.current_scope);
+                Scope::open_scope(&mut self.current_scope, ScopeTy::Normal);
                 self.get_value(else_stats);
                 Scope::close_scope(&mut self.current_scope);
                 self.builder
@@ -345,8 +368,7 @@ impl<'a, 'ctx> Backend<'a, 'ctx> {
                 Some(val)
             }
             Statement::Assignment(name, s) => {
-                Scope::open_scope(&mut self.current_scope);
-                self.current_scope.as_mut().unwrap().current_assign = Some(name.to_string());
+                Scope::open_scope(&mut self.current_scope, ScopeTy::Assign(name.to_string()));
                 if let Some(val) = self.get_value(s) {
                     self.builder
                         .build_store(
@@ -363,7 +385,7 @@ impl<'a, 'ctx> Backend<'a, 'ctx> {
                 }else {
                     panic!();
                 };
-                self.current_scope.as_mut().unwrap().current_assign = None;
+                self.current_scope.as_mut().unwrap().ty = ScopeTy::default();
                 Scope::close_scope(&mut self.current_scope);
                 None
             }
@@ -421,7 +443,7 @@ impl<'a, 'ctx> Backend<'a, 'ctx> {
                     .unwrap();
 
                 self.builder.position_at_end(then_block);
-                Scope::open_scope(&mut self.current_scope);
+                Scope::open_scope(&mut self.current_scope,ScopeTy::Loop {cond_block, after_block});
                 self.get_value(stats);
                 Scope::close_scope(&mut self.current_scope);
                 self.builder.build_unconditional_branch(cond_block).unwrap();
@@ -429,8 +451,24 @@ impl<'a, 'ctx> Backend<'a, 'ctx> {
                 self.builder.position_at_end(after_block);
                 None
             },
-            Statement::Break => todo!(),
-            Statement::Continue => todo!(),
+            Statement::Break => {
+                if let ScopeTy::Loop{cond_block, after_block} = self.current_scope.as_ref().unwrap().get_while().unwrap(){
+                    self.builder.build_unconditional_branch(after_block).unwrap();
+                }else{
+                    panic!()
+                };
+
+                None
+            },
+            Statement::Continue => {
+                if let ScopeTy::Loop{cond_block, after_block} = self.current_scope.as_ref().unwrap().get_while().unwrap(){
+                    self.builder.build_unconditional_branch(cond_block).unwrap();
+                }else{
+                    panic!()
+                };
+
+                None
+            },
             Statement::Call(n, s) => {
                 let func = self.module.get_function(&n).unwrap();
                 
@@ -507,8 +545,8 @@ impl<'a, 'ctx> Backend<'a, 'ctx> {
             Statement::BoolLet(_) => Some(self.context.bool_type().as_basic_type_enum()),
             Statement::PreFix(_, s) => self.get_type(&s),
             Statement::While(_, s) => self.get_type(s),
-            Statement::Break => todo!(),
-            Statement::Continue => todo!(),
+            Statement::Break => None,
+            Statement::Continue => None,
             Statement::Call(s, _) => Some(self.module.get_function(&s).unwrap().get_type().get_return_type().unwrap()),
         }
     }
@@ -569,8 +607,7 @@ impl<'a, 'ctx> Backend<'a, 'ctx> {
                 let basic_block = self.context.append_basic_block(func, "entry");
                 self.builder.position_at_end(basic_block);
 
-                Scope::open_scope(&mut self.current_scope);
-                self.current_scope.as_mut().unwrap().current_function = Some(func);
+                Scope::open_scope(&mut self.current_scope, ScopeTy::Function(func));
                 for (i, arg) in args.iter().enumerate() {
                     let param = func.get_nth_param(i as u32).unwrap();
                     let ty = Self::convert_type(&arg.0, self.context);

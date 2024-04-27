@@ -43,6 +43,8 @@ Statement: Statement = {
     Block,
     Return,
     While,
+    "break" ";"=> Statement::Break,
+    "continue" ";" => Statement::Continue,
 }
 
 

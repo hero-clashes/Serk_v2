@@ -2,6 +2,7 @@ fn Something(i32 key,i32 some) -> i32 {
         var f = 3 + 1;
         while(f==4){
                 f = f + 1;
+                break;
                 return f;
         }
         loop f=f+1;
