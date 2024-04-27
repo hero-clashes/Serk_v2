@@ -41,7 +41,8 @@ Statement: Statement = {
     If,
     Assignment,
     Block,
-    Return
+    Return,
+    While
 }
 
 
@@ -109,7 +110,10 @@ Assignment: Statement = {
     <name:"Identifier"> "=" <e:Expr>   ";"  => Statement::Assignment(name.to_string(), Box::new(Statement::Block(vec![e]))),    
 }
 
-
+While: Statement = {
+    "while" <e:Expr> <s:Statement> => Statement::While(Box::new(e), Box::new(s)),
+    "loop" <Statement> => Statement::While(Box::new(Statement::BoolLet(true)),Box::new(<>)),
+}
 
 extern {
     type Location = usize;
@@ -123,6 +127,12 @@ extern {
         "return" => Token::KeywordReturn,
         "true" => Token::KeywordTrue,
         "false" => Token::KeywordFalse,
+        "while" => Token::KeywordWhile,
+        "loop" => Token::KeywordLoop,
+        "continue" => Token::KeywordContinue,
+        "break" => Token::KeywordBreak,
+
+
         "Identifier" => Token::Identifier(<String>),
         "Num" => Token::Num(<i64>),
         "stringlet" => Token::StringLet(<String>),

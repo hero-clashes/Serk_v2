@@ -4,7 +4,7 @@ fn Something(i32 key,i32 some){
         f = if(f == 4){
                 return -7;
         }else{
-                return 9;
+                return -f;
         };
         
 }

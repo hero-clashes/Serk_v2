@@ -104,7 +104,6 @@ impl<'ctx> Scope<'ctx> {
 
 #[derive(Debug)]
 pub enum Statement {
-    Comment,
     VariableDecl(String, Option<String>, Box<Statement>),
     Math(Box<Statement>, char, Box<Statement>),
     Num(i64),
@@ -116,6 +115,9 @@ pub enum Statement {
     Block(Vec<Statement>),
     BoolLet(bool),
     PreFix(char, Box<Statement>),
+    While(Box<Statement>, Box<Statement>),
+    Break,
+    Continue,
 }
 
 #[derive(Debug)]
@@ -137,7 +139,6 @@ pub struct Backend<'a, 'ctx> {
 impl<'a, 'ctx> Backend<'a, 'ctx> {
     pub fn get_value(&mut self, stat: &Statement) -> Option<BasicValueEnum<'ctx>> {
         match stat {
-            Statement::Comment => panic!(),
             Statement::VariableDecl(n, t, s) => {
                 let ty = self.get_type(&stat).unwrap();
                 let alloc = self.builder.build_alloca(ty, &n).unwrap();
@@ -403,12 +404,36 @@ impl<'a, 'ctx> Backend<'a, 'ctx> {
                 }
                 _ => panic!(),
             },
+            Statement::While(cond, stats) => {
+                let function = self.current_scope.as_ref().unwrap().get_function().unwrap();
+
+                let cond_block = self.context.append_basic_block(function, "while_cond");
+                let then_block = self.context.append_basic_block(function, "while_then");
+                let after_block = self.context.append_basic_block(function, "while_after");
+
+
+                self.builder.position_at_end(cond_block);
+                let cond = self.get_value(cond).unwrap();
+                self.builder
+                    .build_conditional_branch(cond.into_int_value(), then_block, after_block)
+                    .unwrap();
+
+                self.builder.position_at_end(then_block);
+                Scope::open_scope(&mut self.current_scope);
+                self.get_value(stats);
+                Scope::close_scope(&mut self.current_scope);
+                self.builder.build_unconditional_branch(cond_block).unwrap();
+
+                self.builder.position_at_end(after_block);
+                None
+            },
+            Statement::Break => todo!(),
+            Statement::Continue => todo!(),
         }
     }
 
     pub fn get_type(&self, stat: &Statement) -> Option<BasicTypeEnum<'ctx>> {
         match stat {
-            Statement::Comment => panic!("Comment don't have type"),
             Statement::VariableDecl(_, ty, assignments) => {
                 let def_ty = if let Some(t) = ty {
                     Some(Self::convert_type(t, self.context))
@@ -473,6 +498,9 @@ impl<'a, 'ctx> Backend<'a, 'ctx> {
             },
             Statement::BoolLet(_) => Some(self.context.bool_type().as_basic_type_enum()),
             Statement::PreFix(_, s) => self.get_type(&s),
+            Statement::While(_, s) => self.get_type(s),
+            Statement::Break => todo!(),
+            Statement::Continue => todo!(),
         }
     }
 

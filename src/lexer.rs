@@ -36,6 +36,17 @@ pub enum Token {
     KeywordTrue,
     #[token("false")]
     KeywordFalse,
+    #[token("while")]
+    KeywordWhile,
+    #[token("loop")]
+    KeywordLoop,
+    #[token("continue")]
+    KeywordContinue,
+    #[token("break")]
+    KeywordBreak,
+
+
+
     #[regex("[_a-zA-Z][_0-9a-zA-Z]*", |lex| lex.slice().to_string())]
     Identifier(String),
     #[regex("-?[0-9]+", |lex| lex.slice().parse())]
