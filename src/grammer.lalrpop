@@ -74,6 +74,10 @@ Expr: Statement = {
     <l:Expr> "!=" <r:Expr> => Statement::Math(Box::new(l),'n',Box::new(r)),
     <l:Expr> "&&" <r:Expr> => Statement::Math(Box::new(l),'a',Box::new(r)),
     <l:Expr> "||" <r:Expr> => Statement::Math(Box::new(l),'o',Box::new(r)),
+    <l:Expr> "<" <r:Expr>  => Statement::Math(Box::new(l),'l',Box::new(r)),
+    <l:Expr> "<=" <r:Expr> => Statement::Math(Box::new(l),'p',Box::new(r)),
+    <l:Expr> ">" <r:Expr>  => Statement::Math(Box::new(l),'g',Box::new(r)),
+    <l:Expr> ">=" <r:Expr> => Statement::Math(Box::new(l),'q',Box::new(r)),
 
 }
 
@@ -140,7 +144,10 @@ extern {
 
         "==" => Token::Equal,
         "!=" => Token::NotEqual,
-
+        "<"  => Token::Less,
+        "<="  => Token::LessOrEqual,
+        ">"  => Token::Greater,
+        ">="  => Token::GreaterOrEqual,
         "!" => Token::Not,
         "&&" => Token::And,
         "||" => Token::Or,

@@ -227,6 +227,46 @@ impl<'a, 'ctx> Backend<'a, 'ctx> {
                             )
                             .unwrap(),
                     )),
+                    'l' => Some(BasicValueEnum::IntValue(
+                        self.builder
+                        .build_int_compare(
+                            inkwell::IntPredicate::SLT,
+                            l.into_int_value(),
+                            r.into_int_value(),
+                            "Less Than",
+                        )
+                        .unwrap(),
+                    )),
+                    'p' => Some(BasicValueEnum::IntValue(
+                        self.builder
+                        .build_int_compare(
+                            inkwell::IntPredicate::SLE,
+                            l.into_int_value(),
+                            r.into_int_value(),
+                            "Less Equal",
+                        )
+                        .unwrap(),
+                    )),
+                    'g' => Some(BasicValueEnum::IntValue(
+                        self.builder
+                            .build_int_compare(
+                                inkwell::IntPredicate::SGT,
+                                l.into_int_value(),
+                                r.into_int_value(),
+                                "Greater",
+                            )
+                            .unwrap(),
+                    )),
+                    'q' => Some(BasicValueEnum::IntValue(
+                        self.builder
+                            .build_int_compare(
+                                inkwell::IntPredicate::SGE,
+                                l.into_int_value(),
+                                r.into_int_value(),
+                                "Greater_Equal",
+                            )
+                            .unwrap(),
+                    )),
                     _ => todo!(),
                 }
             }
