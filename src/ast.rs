@@ -7,9 +7,7 @@ use inkwell::{
     module::Module,
     types::{BasicType, BasicTypeEnum, FunctionType},
     values::{
-        BasicValue,
-        BasicValueEnum::{self, PointerValue},
-        FunctionValue,
+        BasicMetadataValueEnum, BasicValue, BasicValueEnum::{self, PointerValue}, FunctionValue
     },
 };
 use once_cell::sync::Lazy;
@@ -118,6 +116,7 @@ pub enum Statement {
     While(Box<Statement>, Box<Statement>),
     Break,
     Continue,
+    Call(String, Vec<Statement>),
 }
 
 #[derive(Debug)]
@@ -361,6 +360,8 @@ impl<'a, 'ctx> Backend<'a, 'ctx> {
                             val,
                         )
                         .unwrap();
+                }else {
+                    panic!();
                 };
                 self.current_scope.as_mut().unwrap().current_assign = None;
                 Scope::close_scope(&mut self.current_scope);
@@ -430,6 +431,12 @@ impl<'a, 'ctx> Backend<'a, 'ctx> {
             },
             Statement::Break => todo!(),
             Statement::Continue => todo!(),
+            Statement::Call(n, s) => {
+                let func = self.module.get_function(&n).unwrap();
+                
+                let args = s.iter().map(|stat| BasicMetadataValueEnum::from(self.get_value(stat).unwrap())).collect::<Vec<_>>();
+                self.builder.build_call(func, &args, "call").unwrap().try_as_basic_value().left()
+            },
         }
     }
 
@@ -502,6 +509,7 @@ impl<'a, 'ctx> Backend<'a, 'ctx> {
             Statement::While(_, s) => self.get_type(s),
             Statement::Break => todo!(),
             Statement::Continue => todo!(),
+            Statement::Call(s, _) => Some(self.module.get_function(&s).unwrap().get_type().get_return_type().unwrap()),
         }
     }
 

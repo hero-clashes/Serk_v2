@@ -1,8 +1,9 @@
-fn Something(i32 key,i32 some){
+fn Something(i32 key,i32 some) -> i32 {
         var f = 3 + 1;
         while(f==4){
                 f = f + 1;
+                return f;
         }
         loop f=f+1;
-        
+        f = Something(2,5);
 }

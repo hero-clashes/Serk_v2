@@ -42,7 +42,7 @@ Statement: Statement = {
     Assignment,
     Block,
     Return,
-    While
+    While,
 }
 
 
@@ -89,6 +89,7 @@ Term: Statement = {
     "true"=> Statement::BoolLet(true), 
     "false" => Statement::BoolLet(false),
     "stringlet" => Statement::StringLet(<>),
+    <"Identifier"> "(" <OneOrMore<Expr>> ")" => Statement::Call(<>),
     #[precedence(level="1")] 
     "Identifier" => Statement::Identifier(<>),
     "("  <Expr> ")" => <> ,
@@ -106,7 +107,7 @@ Return: Statement = {
 }
 
 Assignment: Statement = {
-    <name:"Identifier"> "=" <es:Statement> ";" => Statement::Assignment(name.to_string(), Box::new(es)),
+    <name:"Identifier"> "=" <es:Statement> => Statement::Assignment(name.to_string(), Box::new(es)),
     <name:"Identifier"> "=" <e:Expr>   ";"  => Statement::Assignment(name.to_string(), Box::new(Statement::Block(vec![e]))),    
 }
 
