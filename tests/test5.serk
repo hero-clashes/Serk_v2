@@ -3,5 +3,6 @@ fn Something(i32 key,i32 some){
         while(f==4){
                 f = f + 1;
         }
+        loop f=f+1;
         
 }

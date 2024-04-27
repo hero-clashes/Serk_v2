@@ -410,7 +410,8 @@ impl<'a, 'ctx> Backend<'a, 'ctx> {
                 let cond_block = self.context.append_basic_block(function, "while_cond");
                 let then_block = self.context.append_basic_block(function, "while_then");
                 let after_block = self.context.append_basic_block(function, "while_after");
-
+                
+                self.builder.build_unconditional_branch(cond_block).unwrap();
 
                 self.builder.position_at_end(cond_block);
                 let cond = self.get_value(cond).unwrap();
