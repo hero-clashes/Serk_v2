@@ -24,6 +24,8 @@ pub enum Token {
     Skipping,
     #[token("fn")]
     KeywordFn,
+    #[token("gen")]
+    KeywordGen,
     #[token("var")]
     KeywordVar,
     #[token("if")]
@@ -44,8 +46,12 @@ pub enum Token {
     KeywordContinue,
     #[token("break")]
     KeywordBreak,
-
-
+    #[token("yield")]
+    KeywordYield,
+    #[token("for")]
+    KeywordFor,
+    #[token("in")]
+    KeywordIn,
 
     #[regex("[_a-zA-Z][_0-9a-zA-Z]*", |lex| lex.slice().to_string())]
     Identifier(String),

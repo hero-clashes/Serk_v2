@@ -4,7 +4,12 @@ use crate::ast::Statement;
 use crate::lexer::*;
 grammar;
 
-pub Module={
+pub Module: Box<AST>={
+    <items: ModuleItem*> => Box::new(AST::Module(items))
+}
+
+ModuleItem: Box<AST>={
+    "gen" <s:"Identifier"> "(" <l: Comma<Pair>> ")" "->" <t:"Identifier"> <m:Block> => Box::new(AST::GenFunction(Box::new(AST::Function(s, t,l, m)))),
     Function
 };
 
@@ -45,6 +50,8 @@ Statement: Statement = {
     While,
     "break" ";"=> Statement::Break,
     "continue" ";" => Statement::Continue,
+    "yield" <s: "Identifier"> ";" => Statement::Yield(s),
+    "for" "(" <var:"Identifier"> "in" <func:FunCall> ")" <b:Block> => Statement::For(var,Box::new(func), Box::new(b)),
 }
 
 
@@ -91,12 +98,13 @@ Term: Statement = {
     "true"=> Statement::BoolLet(true), 
     "false" => Statement::BoolLet(false),
     "stringlet" => Statement::StringLet(<>),
-    <"Identifier"> "(" <OneOrMore<Expr>> ")" => Statement::Call(<>),
+    FunCall,
     #[precedence(level="1")] 
     "Identifier" => Statement::Identifier(<>),
     "("  <Expr> ")" => <> ,
 }
 
+ FunCall: Statement = {<"Identifier"> "(" <OneOrMore<Expr>> ")" => Statement::Call(<>)}
 
 If: Statement = {
     "if" "(" <condition:Expr> ")" <stats: Block> <el: Else?> => Statement::If(Box::new(condition), Box::new(stats), Box::new(el.unwrap_or(Statement::Block(vec![]))))
@@ -124,6 +132,7 @@ extern {
   
     enum Token {
         "fn" => Token::KeywordFn,
+        "gen" => Token::KeywordGen,
         "var" => Token::KeywordVar,
         "if" => Token::KeywordIf,
         "else" => Token::KeywordElse,
@@ -134,7 +143,9 @@ extern {
         "loop" => Token::KeywordLoop,
         "continue" => Token::KeywordContinue,
         "break" => Token::KeywordBreak,
-
+        "yield" => Token::KeywordYield,
+        "for" => Token::KeywordFor,
+        "in" => Token::KeywordIn,
 
         "Identifier" => Token::Identifier(<String>),
         "Num" => Token::Num(<i64>),

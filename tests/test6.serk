@@ -1,0 +1,14 @@
+gen Range(i64 start, i64 finish) -> i64{
+  var current = start;
+  while(start < finish){
+    yield current;
+    current = current + 1;
+  }
+}
+
+fn Something(){
+    var sum = 0;
+    for(i in range(0,10)){
+        sum = sum + 1;
+    }
+}
