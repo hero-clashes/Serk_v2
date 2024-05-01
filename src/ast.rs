@@ -2,18 +2,22 @@ use core::panic;
 use std::{borrow::Cow, collections::HashMap, ffi::{CStr, CString}, mem};
 
 use inkwell::{
-    basic_block::BasicBlock, builder::Builder, context::Context, intrinsics::Intrinsic, llvm_sys::{core::LLVMBuildCall2, prelude::LLVMValueRef}, module::Module, targets::TargetMachine, types::{AsTypeRef, BasicType, BasicTypeEnum, FunctionType}, values::{
+    basic_block::BasicBlock, builder::Builder, context::{AsContextRef, Context}, intrinsics::Intrinsic, llvm_sys::{core::{LLVMBuildCall2, LLVMConstNull, LLVMRunFunctionPassManager, LLVMTokenTypeInContext}, prelude::LLVMValueRef}, module::Module, passes::{PassBuilderOptions, PassManager, PassManagerSubType}, targets::{InitializationConfig, Target, TargetMachine, TargetTriple}, types::{AsTypeRef, BasicType, BasicTypeEnum, FunctionType}, values::{
         AnyValue, AsValueRef, BasicMetadataValueEnum, BasicValue, BasicValueEnum::{self, PointerValue}, CallSiteValue, FunctionValue
     }, AddressSpace
 };
+use inkwell::values::PointerValue as Op;
 use once_cell::sync::Lazy;
 use regex::Regex;
+#[derive(Clone)]
+pub struct GenFunction<'ctx>{pub co_suspend:FunctionValue<'ctx>,pub suspend_block: BasicBlock<'ctx>,pub cleanup_block: BasicBlock<'ctx>, pub promise: Op<'ctx>}
+
 #[derive(Default, Clone)]
 pub enum ScopeTy<'ctx> {
     #[default]
     Normal,
-    Function(FunctionValue<'ctx>),
-    GenFunction(FunctionValue<'ctx>),
+    Function(),
+    GenFunction(GenFunction<'ctx>),
     Assign(String),
     Loop {
         cond_block: BasicBlock<'ctx>,
@@ -25,6 +29,7 @@ pub struct Scope<'ctx> {
     parent_scope: Option<Box<Scope<'ctx>>>,
     defs: HashMap<String, (BasicTypeEnum<'ctx>, BasicValueEnum<'ctx>)>,
     ty: ScopeTy<'ctx>,
+    pub current_func: Option<FunctionValue<'ctx>>,
 }
 
 impl<'ctx> Scope<'ctx> {
@@ -75,15 +80,31 @@ impl<'ctx> Scope<'ctx> {
     }
 
     fn get_function(&self) -> Option<FunctionValue<'ctx>> {
-        let s = &self.ty;
-        if let ScopeTy::Function(f) = s {
+        let s = &self.current_func;
+        if s.is_some() {
+            return *s
+        } else {
+            let mut current_scope = self;
+            while current_scope.parent_scope.is_some() {
+                current_scope = current_scope.parent_scope.as_ref().unwrap();
+                if current_scope.current_func.is_some(){
+                    return current_scope.current_func;
+                }
+            }
+        }
+
+        None
+    }
+    fn get_gen_function(&self) -> Option<GenFunction> {
+        let s: &ScopeTy<'ctx> = &self.ty;
+        if let ScopeTy::GenFunction(f) = s {
             return Some(f.clone());
         } else {
             let mut current_scope = self;
             while current_scope.parent_scope.is_some() {
                 current_scope = current_scope.parent_scope.as_ref().unwrap();
-                if let ScopeTy::Function(f) = current_scope.ty {
-                    return Some(f);
+                if let ScopeTy::GenFunction(f) = &current_scope.ty {
+                    return Some(f.clone());
                 }
             }
         }
@@ -500,11 +521,48 @@ impl<'a, 'ctx> Backend<'a, 'ctx> {
                     .left()
             }
             Statement::Yield(s) => {
-                let func = self.current_scope.as_ref().unwrap().get_function().unwrap();
-
+                let current_func = self.current_scope.as_ref().unwrap().get_function().unwrap();
+                let GenFunction { co_suspend, suspend_block, cleanup_block, promise } = self.current_scope.as_ref().unwrap().get_gen_function().unwrap();
+                self.builder.build_store(promise, self.current_scope.as_ref().unwrap().get_value(s).unwrap().1).unwrap();
+                
+                let next_block = self.context.append_basic_block(current_func, "next_block");
+                let token_none = unsafe { LLVMConstNull(LLVMTokenTypeInContext(self.context.as_ctx_ref())) };
+                
+                let ch = self.manual_call(co_suspend, vec![token_none,self.context.bool_type().const_int(0, false).as_value_ref()], "ch".to_string());
+                let i8t = self.context.i8_type();
+                self.builder.build_switch(ch.as_any_value_enum().into_int_value(), suspend_block, &[(i8t.const_int(0, false),next_block),(i8t.const_int(1, false),cleanup_block)]).unwrap();
+                self.builder.position_at_end(next_block);
                 None
             }
-            Statement::For(var, func_name, stats) => todo!(),
+            Statement::For(var, func_name, stats) => {
+                let pr = |module,s|->FunctionValue  {Intrinsic::find(s)
+                    .unwrap()
+                    .get_declaration(module, &[])
+                    .unwrap()};
+                
+                let func = self.current_scope.as_ref().unwrap().get_function().unwrap();
+                let hdl = self.get_value(&func_name).unwrap();
+                let value = self.builder.build_call((|module,s|->FunctionValue  {Intrinsic::find(s)
+                    .unwrap()
+                    .get_declaration(module, &[])
+                    .unwrap()})(self.module, "llvm.coro.promise"), &[hdl.as_basic_value_enum().into(), self.context.i32_type().const_int(8, false).into(), self.context.bool_type().const_int(0, false).into()], "promise_addr").unwrap().try_as_basic_value().left().unwrap();
+                self.current_scope.as_mut().unwrap().set_value(var.to_string(), Self::convert_type(&"i64".to_owned(), &self.context), value); //TODO implement type
+                let loop_block = self.context.append_basic_block(func, "for_block");
+                let after_block= self.context.append_basic_block(func, "after_for");
+                self.builder.build_unconditional_branch(loop_block).unwrap();
+                self.builder.position_at_end(loop_block);
+                self.get_value(stats);
+                
+                self.manual_call(pr(self.module,"llvm.coro.resume"), vec![hdl.as_value_ref()], "".to_owned());
+                let done = self.manual_call(pr(self.module,"llvm.coro.done"), vec![hdl.as_value_ref()], "done".to_owned());
+
+                self.builder.build_conditional_branch(done.as_any_value_enum().into_int_value(), after_block, loop_block).unwrap();
+                self.builder.position_at_end(after_block);
+                self.manual_call(pr(self.module,"llvm.coro.destroy"), vec![hdl.as_value_ref()], "".to_owned());
+
+
+                None
+            },
         }
     }
 
@@ -646,7 +704,8 @@ impl<'a, 'ctx> Backend<'a, 'ctx> {
                 let basic_block = self.context.append_basic_block(func, "entry");
                 self.builder.position_at_end(basic_block);
 
-                Scope::open_scope(&mut self.current_scope, ScopeTy::Function(func));
+                Scope::open_scope(&mut self.current_scope, ScopeTy::Function());
+                self.current_scope.as_mut().unwrap().current_func = Some(func);
                 for (i, arg) in args.iter().enumerate() {
                     let param = func.get_nth_param(i as u32).unwrap();
                     let ty = Self::convert_type(&arg.0, self.context);
@@ -657,6 +716,7 @@ impl<'a, 'ctx> Backend<'a, 'ctx> {
                         BasicValueEnum::PointerValue(ass_alloca),
                     );
                     self.builder.build_store(ass_alloca, param).unwrap();
+                    self.current_scope.as_mut().unwrap().set_value(arg.1.to_owned(), ty, ass_alloca.as_basic_value_enum());
                 }
 
                 self.get_value(&stats);
@@ -674,11 +734,26 @@ impl<'a, 'ctx> Backend<'a, 'ctx> {
                 func.verify(true);
             }
             AST::Module(l) => {
-                let malloc = self.module.add_function("malloc", self.context.i8_type().ptr_type(AddressSpace::default()).fn_type(&[self.context.i64_type().into()], false), None);                for ast in l {
+                let malloc = self.module.add_function("malloc", self.context.i8_type().ptr_type(AddressSpace::default()).fn_type(&[self.context.i64_type().into()], false), None);
+                for ast in l {
                     self.gen_code(*ast);
-                    self.module.print_to_stderr();
 
                 }
+                self.module.print_to_stderr();
+                Target::initialize_x86(&InitializationConfig::default());
+                let target_machine = Target::from_name("x86-64").unwrap().create_target_machine(
+                        &TargetTriple::create("x86_64-pc-windows-msvc"),
+                        "x86-64",
+                        "+avx2",
+                        inkwell::OptimizationLevel::None,
+                        inkwell::targets::RelocMode::Default,
+                        inkwell::targets::CodeModel::Default
+                    )
+                    .unwrap();                
+                    let options = PassBuilderOptions::create();
+                    options.set_debug_logging(true);
+                    options.set_verify_each(true);
+                    let p = self.module.run_passes("mem2reg", &target_machine, options).unwrap();
             }
             AST::GenFunction(f) => {
                 if let AST::Function(name, ty_name, args, stats) = *f {
@@ -694,29 +769,6 @@ impl<'a, 'ctx> Backend<'a, 'ctx> {
                     .unwrap()
                     .get_declaration(self.module, &[])
                     .unwrap();
-
-
-                    let manual_call = |s:FunctionValue,mut arg: Vec<LLVMValueRef>, name:String| {
-                        let fn_ty_ref = s.get_type().as_type_ref();
-                        let to_c_str = |s:String| {   if !s.chars().rev().any(|ch| ch == '\0') {
-                            return Cow::from(CString::new(s).expect("unreachable since null bytes are checked"));
-                        }
-                        unsafe { Cow::from(CStr::from_ptr(s.as_ptr() as *const _)) }};
-                        let c_string = to_c_str(name);
-                
-                        let value = unsafe {
-                            LLVMBuildCall2(
-                                self.builder.as_mut_ptr(),
-                                fn_ty_ref,
-                                s.as_value_ref(),
-                                arg.as_mut_ptr(),
-                                arg.len() as u32,
-                                c_string.as_ptr(),
-                            )
-                        };
-                
-                        unsafe { CallSiteValue::new(value) }};
-
 
 
 
@@ -739,7 +791,7 @@ impl<'a, 'ctx> Backend<'a, 'ctx> {
                         )
                         .unwrap();
                     let ptr_type = self.context.i8_type().ptr_type(AddressSpace::default());
-                    let id = manual_call(
+                    let id = self.manual_call(
                             co_id,
                             vec![
                                 self.context.i32_type().const_int(0, false).as_value_ref(),
@@ -750,7 +802,7 @@ impl<'a, 'ctx> Backend<'a, 'ctx> {
                             "id".to_string(),
                         );
                     
-                    let need_alloc = manual_call(co_alloc, vec![id.as_value_ref()], "need_alloc".to_owned());
+                    let need_alloc = self.manual_call(co_alloc, vec![id.as_value_ref()], "need_alloc".to_owned());
                     
                     let dyn_alloc_block = self.context.append_basic_block(func, "dyn_alloc");
                     let coro_begin_block = self.context.append_basic_block(func, "coro_begin");
@@ -766,11 +818,14 @@ impl<'a, 'ctx> Backend<'a, 'ctx> {
                     let phi = self.builder.build_phi(ptr_type.as_basic_type_enum(), "phi").unwrap();
                     phi.add_incoming(&[(&ptr_type.const_null().as_basic_value_enum(), basic_block),(&alloca.unwrap().try_as_basic_value().left().unwrap(),dyn_alloc_block)]);
                     
-                    let hdl = manual_call(co_begin, vec![id.as_value_ref(),phi.as_value_ref()], "hdl".to_string());
+                    let hdl = self.manual_call(co_begin, vec![id.as_value_ref(),phi.as_value_ref()], "hdl".to_string());
                     
 
+                    let cleanup_block = self.context.append_basic_block(func, "cleanup");
+                    let suspend_block = self.context.append_basic_block(func, "suspend");
 
-                    Scope::open_scope(&mut self.current_scope, ScopeTy::Function(func));
+                    Scope::open_scope(&mut self.current_scope, ScopeTy::GenFunction(GenFunction {co_suspend, suspend_block, cleanup_block, promise }));
+                    self.current_scope.as_mut().unwrap().current_func = Some(func);
                     for (i, arg) in args.iter().enumerate() {
                         let param = func.get_nth_param(i as u32).unwrap();
                         let ty = Self::convert_type(&arg.0, self.context);
@@ -781,19 +836,18 @@ impl<'a, 'ctx> Backend<'a, 'ctx> {
                             BasicValueEnum::PointerValue(ass_alloca),
                         );
                         self.builder.build_store(ass_alloca, param).unwrap();
+                        self.current_scope.as_mut().unwrap().set_value(arg.1.to_owned(), ty, ass_alloca.as_basic_value_enum());
                     }
-                    // self.get_value(&stats);
+                    self.get_value(&stats);
                     Scope::close_scope(&mut self.current_scope);
 
 
 
-                    let cleanup_block = self.context.append_basic_block(func, "cleanup");
-                    let suspend_block = self.context.append_basic_block(func, "suspend");
 
-                    self.builder.build_unconditional_branch(cleanup_block);
+                    self.builder.build_unconditional_branch(cleanup_block).unwrap();
 
                     self.builder.position_at_end(cleanup_block);
-                    let mem = manual_call(co_free, vec![id.as_value_ref(),hdl.as_value_ref()], "mem".to_string());
+                    let mem = self.manual_call(co_free, vec![id.as_value_ref(),hdl.as_value_ref()], "mem".to_string());
                     self.builder.build_free(mem.as_any_value_enum().into_pointer_value()).unwrap();
                     self.builder.build_unconditional_branch(suspend_block).unwrap();
 
@@ -801,12 +855,31 @@ impl<'a, 'ctx> Backend<'a, 'ctx> {
                     self.builder.build_call(co_end, &[hdl.try_as_basic_value().unwrap_left().into(), self.context.bool_type().const_int(0, false).into()], "unused").unwrap();
                     self.builder.build_return(Some(&hdl.try_as_basic_value().unwrap_left())).unwrap();
                     func.verify(true);
-                    self.module.print_to_stderr();
-
                 } else {
                     panic!()
                 };
             }
         }
+    }
+    fn manual_call(&self,s:FunctionValue,mut arg: Vec<LLVMValueRef>, name:String) -> CallSiteValue<'ctx>  {
+        let fn_ty_ref = s.get_type().as_type_ref();
+        let to_c_str = |s:String| {   if !s.chars().rev().any(|ch| ch == '\0') {
+            return Cow::from(CString::new(s).expect("unreachable since null bytes are checked"));
+        }
+        unsafe { Cow::from(CStr::from_ptr(s.as_ptr() as *const _)) }};
+        let c_string = to_c_str(name);
+
+        let value = unsafe {
+            LLVMBuildCall2(
+                self.builder.as_mut_ptr(),
+                fn_ty_ref,
+                s.as_value_ref(),
+                arg.as_mut_ptr(),
+                arg.len() as u32,
+                c_string.as_ptr(),
+            )
+        };
+
+        unsafe { CallSiteValue::new(value) }
     }
 }

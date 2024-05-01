@@ -27,7 +27,7 @@ fn main() {
     let output = grammer::ModuleParser::new().parse(Lexer::new(&input));
     match output {
         Ok(s) => {
-            println!("{:?}", s);
+            // println!("{:?}", s);
             let context = Context::create();
             let mut module = context.create_module("Hero");
             let mut builder = context.create_builder();
@@ -37,6 +37,11 @@ fn main() {
                 builder: &mut builder,
                 current_scope: Some(Box::new(Scope::default())),
             }.gen_code(*s);
+            let _ = module.verify().unwrap();
+            module.print_to_file("a.ir").unwrap();
+            let exc = module.create_jit_execution_engine(inkwell::OptimizationLevel::None).unwrap();
+            let func = unsafe { exc.get_function::<unsafe extern "C" fn() -> i64>("Something").unwrap() };
+            println!("output: {:?}",unsafe{func.call()});
         }
         Err(s) => {
             println!("Error: {:?}", s);
