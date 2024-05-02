@@ -166,7 +166,7 @@ pub enum Statement {
     Break,
     Continue,
     Call(String, Vec<Statement>),
-    Yield(String),
+    Yield(Box<Statement>),
     For(String, Box<Statement>, Box<Statement>)
 }
 
@@ -528,8 +528,9 @@ impl<'a, 'ctx> Backend<'a, 'ctx> {
             }
             Statement::Yield(s) => {
                 let current_func = self.current_scope.as_ref().unwrap().get_function().unwrap();
+                let value = self.get_value(s).unwrap();
                 let GenFunction { co_suspend, suspend_block, cleanup_block, promise } = self.current_scope.as_ref().unwrap().get_gen_function().unwrap();
-                self.builder.build_store(promise, self.current_scope.as_ref().unwrap().get_value(s).unwrap().1).unwrap();
+                self.builder.build_store(promise, value).unwrap();
                 
                 let next_block = self.context.append_basic_block(current_func, "next_block");
                 let token_none = unsafe { LLVMConstNull(LLVMTokenTypeInContext(self.context.as_ctx_ref())) };

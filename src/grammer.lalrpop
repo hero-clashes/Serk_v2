@@ -50,7 +50,7 @@ Statement: Statement = {
     While,
     "break" ";"=> Statement::Break,
     "continue" ";" => Statement::Continue,
-    "yield" <s: "Identifier"> ";" => Statement::Yield(s),
+    "yield" <s: "Identifier"> ";" => Statement::Yield(Box::new(Statement::Identifier(s))),
     "for" "(" <var:"Identifier"> "in" <func:FunCall> ")" <b:Block> => Statement::For(var,Box::new(func), Box::new(b)),
 }
 
