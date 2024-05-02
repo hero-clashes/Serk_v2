@@ -2,7 +2,7 @@ use core::panic;
 use std::{borrow::Cow, collections::HashMap, ffi::{CStr, CString}, mem};
 
 use inkwell::{
-    basic_block::BasicBlock, builder::Builder, context::{AsContextRef, Context}, intrinsics::Intrinsic, llvm_sys::{core::{LLVMBuildCall2, LLVMConstNull, LLVMRunFunctionPassManager, LLVMTokenTypeInContext}, prelude::LLVMValueRef}, module::Module, passes::{PassBuilderOptions, PassManager, PassManagerSubType}, targets::{InitializationConfig, Target, TargetMachine, TargetTriple}, types::{AsTypeRef, BasicType, BasicTypeEnum, FunctionType}, values::{
+    basic_block::BasicBlock, builder::Builder, context::{AsContextRef, Context}, intrinsics::Intrinsic, llvm_sys::{core::{LLVMBuildCall2, LLVMConstNull, LLVMGetEnumAttributeKindForName, LLVMRunFunctionPassManager, LLVMTokenTypeInContext}, prelude::LLVMValueRef}, module::Module, passes::{PassBuilderOptions, PassManager, PassManagerSubType}, targets::{InitializationConfig, Target, TargetMachine, TargetTriple}, types::{AsTypeRef, BasicType, BasicTypeEnum, FunctionType}, values::{
         AnyValue, AsValueRef, BasicMetadataValueEnum, BasicValue, BasicValueEnum::{self, PointerValue}, CallSiteValue, FunctionValue
     }, AddressSpace
 };
@@ -741,19 +741,21 @@ impl<'a, 'ctx> Backend<'a, 'ctx> {
                 }
                 self.module.print_to_stderr();
                 Target::initialize_x86(&InitializationConfig::default());
-                let target_machine = Target::from_name("x86-64").unwrap().create_target_machine(
-                        &TargetTriple::create("x86_64-pc-windows-msvc"),
-                        "x86-64",
-                        "+avx2",
+                let get_default_triple = TargetMachine::get_default_triple();
+                let target_machine: TargetMachine = Target::from_triple(&get_default_triple).unwrap().create_target_machine(
+                        &get_default_triple,
+                        "",
+                        "",
                         inkwell::OptimizationLevel::None,
                         inkwell::targets::RelocMode::Default,
-                        inkwell::targets::CodeModel::Default
+                        inkwell::targets::CodeModel::JITDefault
                     )
                     .unwrap();                
                     let options = PassBuilderOptions::create();
                     options.set_debug_logging(true);
                     options.set_verify_each(true);
-                    let p = self.module.run_passes("mem2reg", &target_machine, options).unwrap();
+                    self.module.run_passes("coro-early,coro-split,coro-cleanup,mem2reg,lint", &target_machine, options).unwrap();
+                    self.module.print_to_stderr();
             }
             AST::GenFunction(f) => {
                 if let AST::Function(name, ty_name, args, stats) = *f {
@@ -855,6 +857,8 @@ impl<'a, 'ctx> Backend<'a, 'ctx> {
                     self.builder.build_call(co_end, &[hdl.try_as_basic_value().unwrap_left().into(), self.context.bool_type().const_int(0, false).into()], "unused").unwrap();
                     self.builder.build_return(Some(&hdl.try_as_basic_value().unwrap_left())).unwrap();
                     func.verify(true);
+                    let s = "presplitcoroutine".to_string();
+                    func.add_attribute(inkwell::attributes::AttributeLoc::Function, self.context.create_enum_attribute(unsafe { LLVMGetEnumAttributeKindForName(s.as_ptr() as *const i8, s.len()) }, 0))
                 } else {
                     panic!()
                 };

@@ -38,7 +38,6 @@ fn main() {
                 current_scope: Some(Box::new(Scope::default())),
             }.gen_code(*s);
             let _ = module.verify().unwrap();
-            module.print_to_file("a.ir").unwrap();
             let exc = module.create_jit_execution_engine(inkwell::OptimizationLevel::None).unwrap();
             let func = unsafe { exc.get_function::<unsafe extern "C" fn() -> i64>("Something").unwrap() };
             println!("output: {:?}",unsafe{func.call()});

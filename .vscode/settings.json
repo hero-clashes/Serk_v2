@@ -4,6 +4,7 @@
         "lalrpop",
         "msvc",
         "Paren",
+        "presplitcoroutine",
         "serk"
     ],
     "rust-analyzer.linkedProjects": [

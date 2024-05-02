@@ -1,6 +1,6 @@
 gen range(i64 start, i64 finish) -> i64{
   var current = start;
-  while(start < finish){
+  while(current < finish){
     yield current;
     current = current + 1;
   }
