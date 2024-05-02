@@ -1,4 +1,3 @@
-use core::panic;
 use std::{borrow::Cow, collections::HashMap, ffi::{CStr, CString}, mem};
 
 use inkwell::{
@@ -405,7 +404,14 @@ impl<'a, 'ctx> Backend<'a, 'ctx> {
                         )
                         .unwrap();
                 } else {
-                    panic!();
+                    match self.get_type(s){
+                        Some(s) => {
+                            if self.current_scope.as_ref().unwrap().get_value(name).unwrap().0 != s{
+                                panic!()
+                            }
+                        },
+                        None => panic!(),
+                    }
                 };
                 self.current_scope.as_mut().unwrap().ty = ScopeTy::default();
                 Scope::close_scope(&mut self.current_scope);
@@ -598,8 +604,17 @@ impl<'a, 'ctx> Backend<'a, 'ctx> {
             Statement::StringLet(s) => Some(BasicTypeEnum::ArrayType(
                 self.context.i8_type().array_type(s.len() as u32),
             )),
-            Statement::If(cond, stats, else_stats) => todo!(),
-            Statement::Return(_) => None,
+            Statement::If(cond, stats, else_stats) => {
+                let stats_ty = self.get_type(&stats);
+                let else_stats_ty = self.get_type(&else_stats);
+
+                if stats_ty == else_stats_ty {
+                    return stats_ty;
+                }else{
+                    panic!()
+                }
+            },
+            Statement::Return(s) => self.get_type(s),
             Statement::Identifier(idenf) => Some(
                 self.current_scope
                     .as_ref()
@@ -610,7 +625,7 @@ impl<'a, 'ctx> Backend<'a, 'ctx> {
             ),
             Statement::Assignment(_, _) => todo!(),
             Statement::Block(stats) => match stats.len() {
-                0 => panic!(),
+                0 => None,
                 1 => Some(self.get_type(&stats[0]).unwrap()),
                 _ => {
                     let mut ty = None;
@@ -721,25 +736,23 @@ impl<'a, 'ctx> Backend<'a, 'ctx> {
 
                 self.get_value(&stats);
 
-                if ty_name == "()"
-                    && func
+                if func
                         .get_last_basic_block()
                         .unwrap()
                         .get_terminator()
                         .is_none()
                 {
-                    self.builder.build_return(None).unwrap();
+                    if ty_name == "()"{
+                        self.builder.build_return(None).unwrap();
+                    }else{
+                        panic!("function doesn't have terminator");
+                    }
                 };
                 Scope::close_scope(&mut self.current_scope);
                 func.verify(true);
             }
             AST::Module(l) => {
                 let malloc = self.module.add_function("malloc", self.context.i8_type().ptr_type(AddressSpace::default()).fn_type(&[self.context.i64_type().into()], false), None);
-                for ast in l {
-                    self.gen_code(*ast);
-
-                }
-                self.module.print_to_stderr();
                 Target::initialize_x86(&InitializationConfig::default());
                 let get_default_triple = TargetMachine::get_default_triple();
                 let target_machine: TargetMachine = Target::from_triple(&get_default_triple).unwrap().create_target_machine(
@@ -751,9 +764,18 @@ impl<'a, 'ctx> Backend<'a, 'ctx> {
                         inkwell::targets::CodeModel::JITDefault
                     )
                     .unwrap();                
-                    let options = PassBuilderOptions::create();
-                    self.module.run_passes("coro-early,coro-split,coro-elide,coro-cleanup,reassociate,instcombine,simplifycfg,mem2reg,lint", &target_machine, options).unwrap();
-                    // self.module.print_to_stderr();
+                let options = PassBuilderOptions::create();
+                self.module.set_triple(&get_default_triple);
+                self.module.set_data_layout(&target_machine.get_target_data().get_data_layout());
+                for ast in l {
+                    self.gen_code(*ast);
+
+                }
+                self.module.print_to_file("a.ir");
+            
+                self.module.run_passes("coro-early,coro-split,coro-elide,coro-cleanup,reassociate,instcombine,simplifycfg,mem2reg,gvn,lint", &target_machine, options).unwrap();
+                self.module.print_to_file("b.ir");
+   
             }
             AST::GenFunction(f) => {
                 if let AST::Function(name, ty_name, args, stats) = *f {

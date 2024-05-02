@@ -40,6 +40,7 @@ fn main() {
             let _ = module.verify().unwrap();
             let exc = module.create_jit_execution_engine(inkwell::OptimizationLevel::None).unwrap();
             let func = unsafe { exc.get_function::<unsafe extern "C" fn() -> i64>("Something").unwrap() };
+            println!("output: {:?}, Expected: {}",unsafe{func.call()}, (0..10).sum::<i64>());
         }
         Err(s) => {
             println!("Error: {:?}", s);

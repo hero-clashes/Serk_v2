@@ -1,15 +1,9 @@
-gen range(i64 start, i64 finish) -> i64{
-  var current = start;
-  while(current < finish){
-    yield current;
-    current = current + 1;
-  }
-}
-
-fn Something() -> i64{
-    var sum = 0;
-    for(i in range(0,10)){
-        sum = sum + i;
-    }
-    return sum;
+fn Something(i64 key,i64 some) -> i64 {
+        var f = 3 + 1;
+        f = if(f == 4){
+                return -7;
+        }else{
+                return -f;
+        }
+        return f;
 }
