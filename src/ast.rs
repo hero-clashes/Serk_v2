@@ -754,7 +754,7 @@ impl<'a, 'ctx> Backend<'a, 'ctx> {
                     let options = PassBuilderOptions::create();
                     options.set_debug_logging(true);
                     options.set_verify_each(true);
-                    self.module.run_passes("coro-early,coro-split,coro-cleanup,mem2reg,lint", &target_machine, options).unwrap();
+                    self.module.run_passes("coro-early,coro-split,coro-elide,coro-cleanup,reassociate,instcombine,simplifycfg,mem2reg,lint", &target_machine, options).unwrap();
                     self.module.print_to_stderr();
             }
             AST::GenFunction(f) => {
@@ -822,6 +822,9 @@ impl<'a, 'ctx> Backend<'a, 'ctx> {
                     
                     let hdl = self.manual_call(co_begin, vec![id.as_value_ref(),phi.as_value_ref()], "hdl".to_string());
                     
+                    let basic_block = self.context.append_basic_block(func, "begin");
+                    self.builder.build_unconditional_branch(basic_block).unwrap();
+                    self.builder.position_at_end(basic_block);
 
                     let cleanup_block = self.context.append_basic_block(func, "cleanup");
                     let suspend_block = self.context.append_basic_block(func, "suspend");
@@ -846,7 +849,10 @@ impl<'a, 'ctx> Backend<'a, 'ctx> {
 
 
 
-                    self.builder.build_unconditional_branch(cleanup_block).unwrap();
+                    let token_none = unsafe { LLVMConstNull(LLVMTokenTypeInContext(self.context.as_ctx_ref())) };
+                    let ch = self.manual_call(co_suspend, vec![token_none,self.context.bool_type().const_int(1, true).as_value_ref()], "ch".to_string());
+                    let i8t = self.context.i8_type();
+                    self.builder.build_switch(ch.as_any_value_enum().into_int_value(), suspend_block, &[(i8t.const_int(1, false),cleanup_block)]).unwrap();                    
 
                     self.builder.position_at_end(cleanup_block);
                     let mem = self.manual_call(co_free, vec![id.as_value_ref(),hdl.as_value_ref()], "mem".to_string());
