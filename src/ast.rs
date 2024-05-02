@@ -752,10 +752,8 @@ impl<'a, 'ctx> Backend<'a, 'ctx> {
                     )
                     .unwrap();                
                     let options = PassBuilderOptions::create();
-                    options.set_debug_logging(true);
-                    options.set_verify_each(true);
                     self.module.run_passes("coro-early,coro-split,coro-elide,coro-cleanup,reassociate,instcombine,simplifycfg,mem2reg,lint", &target_machine, options).unwrap();
-                    self.module.print_to_stderr();
+                    // self.module.print_to_stderr();
             }
             AST::GenFunction(f) => {
                 if let AST::Function(name, ty_name, args, stats) = *f {

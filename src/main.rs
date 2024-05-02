@@ -2,7 +2,7 @@ pub mod ast;
 pub mod lexer;
 use std::fs;
 
-use lalrpop_util::lalrpop_mod;
+use lalrpop_util::{lalrpop_mod, ParseError::{ExtraToken, InvalidToken, UnrecognizedEof, UnrecognizedToken, User}};
 
 lalrpop_mod!(pub grammer);
 use inkwell::
@@ -40,20 +40,15 @@ fn main() {
             let _ = module.verify().unwrap();
             let exc = module.create_jit_execution_engine(inkwell::OptimizationLevel::None).unwrap();
             let func = unsafe { exc.get_function::<unsafe extern "C" fn() -> i64>("Something").unwrap() };
-            println!("output: {:?}",unsafe{func.call()});
         }
         Err(s) => {
             println!("Error: {:?}", s);
             match s {
-                lalrpop_util::ParseError::InvalidToken { location } => {
-                    println!("{:?}", input.split_at(location))
-                }
-                lalrpop_util::ParseError::UnrecognizedEof { location, expected } => todo!(),
-                lalrpop_util::ParseError::UnrecognizedToken { token, expected } => {
-                    println!("{:?}", input.split_at(token.0))
-                }
-                lalrpop_util::ParseError::ExtraToken { token } => todo!(),
-                lalrpop_util::ParseError::User { error } => println!("{:?}",error),
+                InvalidToken { location } => println!("{:?}", input.split_at(location)),
+                UnrecognizedEof { location: _, expected:_ } => {},
+                UnrecognizedToken { token, expected: _ } => println!("{:?}", input.split_at(token.0)),
+                ExtraToken { token } => println!("{:?}", input.split_at(token.0)),
+                User { error:_ } => for a in Lexer::new(&input){println!("{:?}",a)},
             }
         }
     }
