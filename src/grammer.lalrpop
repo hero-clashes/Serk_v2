@@ -51,15 +51,39 @@ Statement: Statement = {
     While,
     <l:@L> "break"    ";" <r:@R>=> Statement::new((l,r),StatementData::Break),
     <l:@L> "continue" ";" <r:@R> => Statement::new((l,r),StatementData::Continue),
-    <l:@L> "yield" <sl:@L> <s: "Identifier"> <sr:@R>";" <r:@R>=> Statement::new((l,r),StatementData::Yield(Box::new(Statement::new((sl,sr),StatementData::Identifier(s))))),
+    <l:@L> "yield" <sl:@L> <s: "Identifier"> <sr:@R>";" <r:@R>=> Statement::new(
+        (l, r),
+        StatementData::Yield(Box::new(Statement::new(
+            (sl, sr),
+            StatementData::Identifier(s),
+        ))),
+    ),
     <l:@L> "for" "(" <var:"Identifier"> "in" <func:FunCall> ")" <b:Block> <r:@R>=> Statement::new((l,r),StatementData::For(var,Box::new(func), Box::new(b))),
 }
 
 
 VariableDecl: Statement = {
-    <l:@L> "var" <s: "Identifier"> <t:TypeDef> "=" <a:Expr> ";"  <r:@R>=> Statement::new((l,r),StatementData::VariableDecl(s ,t, Box::new(Statement::new((l,r),StatementData::Block(vec![a]))))),
+    <l:@L> "var" <s: "Identifier"> <t:TypeDef> "=" <a:Expr> ";"  <r:@R>=> Statement::new(
+        (l, r),
+        StatementData::VariableDecl(
+            s,
+            t,
+            Box::new(Statement::new((l, r), StatementData::Block(vec![a]))),
+        ),
+    ),
+
+
     <l:@L>"var" <s: "Identifier"> <t:TypeDef> "=" <a:Statement> <r:@R>=> Statement::new((l,r),StatementData::VariableDecl(s ,t, Box::new(a))),
-    <l:@L> "var" <s: "Identifier"> <t:TypeDef>                   ";" <r:@R>=> Statement::new((l,r),StatementData::VariableDecl(s ,t, Box::new(Statement::new((l,r),StatementData::Block(vec![]))))),
+
+
+    <l:@L> "var" <s: "Identifier"> <t:TypeDef>                   ";" <r:@R>=> Statement::new(
+        (l, r),
+        StatementData::VariableDecl(
+            s,
+            t,
+            Box::new(Statement::new((l, r), StatementData::Block(vec![]))),
+        ),
+    ),
 }
 
 TypeDef: Option<String> = {

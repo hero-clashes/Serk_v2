@@ -697,7 +697,7 @@ impl<'a, 'ctx> Backend<'a, 'ctx> {
             StatementData::While(cond, s) => {
                 if self.get_type(&cond).unwrap() != self.context.bool_type().as_basic_type_enum() {
                     let d = Diagnostic::<usize>::error()
-                    .with_message("if condition has to be of type i1(bool)")
+                    .with_message("while condition has to be of type i1(bool)")
                     .with_labels(vec![Label::primary(self.current_file, cond.to_rng())]);
                     self.print_error(d,true);
                 }
