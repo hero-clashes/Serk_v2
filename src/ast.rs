@@ -1,7 +1,8 @@
-use std::{borrow::Cow, collections::HashMap, ffi::{CStr, CString}, mem};
+use std::{borrow::Cow, collections::HashMap, ffi::{CStr, CString}, mem, ops::Range, process};
 
+use codespan_reporting::{diagnostic::{Diagnostic, Label}, files::SimpleFiles, term::{self, termcolor::{ColorChoice, StandardStream}}};
 use inkwell::{
-    basic_block::BasicBlock, builder::Builder, context::{AsContextRef, Context}, intrinsics::Intrinsic, llvm_sys::{core::{LLVMBuildCall2, LLVMConstNull, LLVMGetEnumAttributeKindForName, LLVMRunFunctionPassManager, LLVMTokenTypeInContext}, prelude::LLVMValueRef}, module::Module, passes::{PassBuilderOptions, PassManager, PassManagerSubType}, targets::{InitializationConfig, Target, TargetMachine, TargetTriple}, types::{AsTypeRef, BasicType, BasicTypeEnum, FunctionType}, values::{
+    basic_block::BasicBlock, builder::Builder, context::{AsContextRef, Context}, intrinsics::Intrinsic, llvm_sys::{core::{LLVMBuildCall2, LLVMConstNull, LLVMGetEnumAttributeKindForName, LLVMTokenTypeInContext}, prelude::LLVMValueRef}, module::Module, passes::PassBuilderOptions, targets::{InitializationConfig, Target, TargetMachine}, types::{AsTypeRef, BasicType, BasicTypeEnum, FunctionType}, values::{
         AnyValue, AsValueRef, BasicMetadataValueEnum, BasicValue, BasicValueEnum::{self, PointerValue}, CallSiteValue, FunctionValue
     }, AddressSpace
 };
@@ -150,7 +151,20 @@ impl<'ctx> Scope<'ctx> {
 }
 
 #[derive(Debug)]
-pub enum Statement {
+pub struct Statement{
+    loc: (usize,usize),
+    data: StatementData,
+}
+impl Statement{
+    pub fn new(loc:(usize,usize), data:StatementData)->Self{
+        Statement { loc, data }
+    }
+    pub fn to_rng(&self) -> Range<usize>{
+        self.loc.0..self.loc.1
+    }
+}
+#[derive(Debug)]
+pub enum StatementData {
     VariableDecl(String, Option<String>, Box<Statement>),
     Math(Box<Statement>, char, Box<Statement>),
     Num(i64),
@@ -185,12 +199,14 @@ pub struct Backend<'a, 'ctx> {
     pub builder: &'a mut Builder<'ctx>,
     pub module: &'a mut Module<'ctx>,
     pub current_scope: Option<Box<Scope<'ctx>>>,
+    pub current_file: usize,
+    pub files: SimpleFiles<String,String>,
 }
 
 impl<'a, 'ctx> Backend<'a, 'ctx> {
     pub fn get_value(&mut self, stat: &Statement) -> Option<BasicValueEnum<'ctx>> {
-        match stat {
-            Statement::VariableDecl(n, t, s) => {
+        match &stat.data {
+            StatementData::VariableDecl(n, t, s) => {
                 let ty = self.get_type(&stat).unwrap();
                 let alloc = self.builder.build_alloca(ty, &n).unwrap();
 
@@ -204,9 +220,9 @@ impl<'a, 'ctx> Backend<'a, 'ctx> {
                 );
                 Some(BasicValueEnum::PointerValue(alloc))
             }
-            Statement::Math(l, op, r) => {
-                let l = self.get_value(l).unwrap();
-                let r = self.get_value(r).unwrap();
+            StatementData::Math(l, op, r) => {
+                let l = self.get_value(&l).unwrap();
+                let r = self.get_value(&r).unwrap();
                 match op {
                     '+' => Some(BasicValueEnum::IntValue(
                         self.builder
@@ -314,14 +330,14 @@ impl<'a, 'ctx> Backend<'a, 'ctx> {
                     _ => todo!(),
                 }
             }
-            Statement::Num(n) => Some(BasicValueEnum::IntValue(
+            StatementData::Num(n) => Some(BasicValueEnum::IntValue(
                 self.context.i64_type().const_int(*n as u64, true),
             )),
-            Statement::StringLet(lateral) => Some(BasicValueEnum::ArrayValue(
+            StatementData::StringLet(lateral) => Some(BasicValueEnum::ArrayValue(
                 self.context.const_string(lateral.as_bytes(), false),
             )),
-            Statement::If(cond, stats, else_stats) => {
-                let cond = self.get_value(cond).unwrap();
+            StatementData::If(cond, stats, else_stats) => {
+                let cond = self.get_value(&cond).unwrap();
 
                 let function = self.current_scope.as_ref().unwrap().get_function().unwrap();
                 let then_block = self.context.append_basic_block(function, "if_then");
@@ -333,7 +349,7 @@ impl<'a, 'ctx> Backend<'a, 'ctx> {
 
                 self.builder.position_at_end(then_block);
                 Scope::open_scope(&mut self.current_scope, ScopeTy::Normal);
-                self.get_value(stats);
+                self.get_value(&stats);
                 Scope::close_scope(&mut self.current_scope);
                 self.builder
                     .build_unconditional_branch(after_block)
@@ -341,7 +357,7 @@ impl<'a, 'ctx> Backend<'a, 'ctx> {
 
                 self.builder.position_at_end(else_block);
                 Scope::open_scope(&mut self.current_scope, ScopeTy::Normal);
-                self.get_value(else_stats);
+                self.get_value(&else_stats);
                 Scope::close_scope(&mut self.current_scope);
                 self.builder
                     .build_unconditional_branch(after_block)
@@ -351,8 +367,8 @@ impl<'a, 'ctx> Backend<'a, 'ctx> {
 
                 None
             }
-            Statement::Return(s) => {
-                let get_value = self.get_value(s).unwrap();
+            StatementData::Return(s) => {
+                let get_value = self.get_value(&s).unwrap();
 
                 let get_assign = &self.current_scope.as_ref().unwrap().get_assign();
                 if get_assign.is_none() {
@@ -373,7 +389,7 @@ impl<'a, 'ctx> Backend<'a, 'ctx> {
                 }
                 None
             }
-            Statement::Identifier(name) => {
+            StatementData::Identifier(name) => {
                 let (ty, mut val) = *self
                     .current_scope
                     .as_ref()
@@ -388,9 +404,9 @@ impl<'a, 'ctx> Backend<'a, 'ctx> {
                 }
                 Some(val)
             }
-            Statement::Assignment(name, s) => {
+            StatementData::Assignment(name, s) => {
                 Scope::open_scope(&mut self.current_scope, ScopeTy::Assign(name.to_string()));
-                if let Some(val) = self.get_value(s) {
+                if let Some(val) = self.get_value(&s) {
                     self.builder
                         .build_store(
                             self.current_scope
@@ -404,9 +420,9 @@ impl<'a, 'ctx> Backend<'a, 'ctx> {
                         )
                         .unwrap();
                 } else {
-                    match self.get_type(s){
+                    match self.get_type(&s){
                         Some(s) => {
-                            if self.current_scope.as_ref().unwrap().get_value(name).unwrap().0 != s{
+                            if self.current_scope.as_ref().unwrap().get_value(&name).unwrap().0 != s{
                                 panic!()
                             }
                         },
@@ -417,26 +433,26 @@ impl<'a, 'ctx> Backend<'a, 'ctx> {
                 Scope::close_scope(&mut self.current_scope);
                 None
             }
-            Statement::Block(stats) => {
+            StatementData::Block(stats) => {
                 if stats.len() == 1 {
                     return self.get_value(&stats[0]);
                 }
 
                 for stat in stats {
-                    self.get_value(stat);
+                    self.get_value(&stat);
                 }
 
                 None
             }
-            Statement::BoolLet(bool) => Some(
+            StatementData::BoolLet(bool) => Some(
                 self.context
                     .bool_type()
                     .const_int(*bool as u64, false)
                     .as_basic_value_enum(),
             ),
-            Statement::PreFix(p, s) => match p {
+            StatementData::PreFix(p, s) => match p {
                 '-' => {
-                    let value = self.get_value(s).unwrap().into_int_value();
+                    let value = self.get_value(&s).unwrap().into_int_value();
                     Some(
                         self.builder
                             .build_int_neg(value, "Neg")
@@ -445,7 +461,7 @@ impl<'a, 'ctx> Backend<'a, 'ctx> {
                     )
                 }
                 '!' => {
-                    let value = self.get_value(s).unwrap().into_int_value();
+                    let value = self.get_value(&s).unwrap().into_int_value();
                     Some(
                         self.builder
                             .build_not(value, "Not")
@@ -455,7 +471,7 @@ impl<'a, 'ctx> Backend<'a, 'ctx> {
                 }
                 _ => panic!(),
             },
-            Statement::While(cond, stats) => {
+            StatementData::While(cond, stats) => {
                 let function = self.current_scope.as_ref().unwrap().get_function().unwrap();
 
                 let cond_block = self.context.append_basic_block(function, "while_cond");
@@ -465,7 +481,7 @@ impl<'a, 'ctx> Backend<'a, 'ctx> {
                 self.builder.build_unconditional_branch(cond_block).unwrap();
 
                 self.builder.position_at_end(cond_block);
-                let cond = self.get_value(cond).unwrap();
+                let cond = self.get_value(&cond).unwrap();
                 self.builder
                     .build_conditional_branch(cond.into_int_value(), then_block, after_block)
                     .unwrap();
@@ -478,14 +494,14 @@ impl<'a, 'ctx> Backend<'a, 'ctx> {
                         after_block,
                     },
                 );
-                self.get_value(stats);
+                self.get_value(&stats);
                 Scope::close_scope(&mut self.current_scope);
                 self.builder.build_unconditional_branch(cond_block).unwrap();
 
                 self.builder.position_at_end(after_block);
                 None
             }
-            Statement::Break => {
+            StatementData::Break => {
                 if let ScopeTy::Loop {
                     cond_block,
                     after_block,
@@ -500,7 +516,7 @@ impl<'a, 'ctx> Backend<'a, 'ctx> {
 
                 None
             }
-            Statement::Continue => {
+            StatementData::Continue => {
                 if let ScopeTy::Loop {
                     cond_block,
                     after_block,
@@ -513,7 +529,7 @@ impl<'a, 'ctx> Backend<'a, 'ctx> {
 
                 None
             }
-            Statement::Call(n, s) => {
+            StatementData::Call(n, s) => {
                 let func = self.module.get_function(&n).unwrap();
 
                 let args = s
@@ -526,9 +542,9 @@ impl<'a, 'ctx> Backend<'a, 'ctx> {
                     .try_as_basic_value()
                     .left()
             }
-            Statement::Yield(s) => {
+            StatementData::Yield(s) => {
                 let current_func = self.current_scope.as_ref().unwrap().get_function().unwrap();
-                let value = self.get_value(s).unwrap();
+                let value = self.get_value(&s).unwrap();
                 let GenFunction { co_suspend, suspend_block, cleanup_block, promise } = self.current_scope.as_ref().unwrap().get_gen_function().unwrap();
                 self.builder.build_store(promise, value).unwrap();
                 
@@ -541,7 +557,7 @@ impl<'a, 'ctx> Backend<'a, 'ctx> {
                 self.builder.position_at_end(next_block);
                 None
             }
-            Statement::For(var, func_name, stats) => {
+            StatementData::For(var, func_name, stats) => {
                 let pr = |module,s|->FunctionValue  {Intrinsic::find(s)
                     .unwrap()
                     .get_declaration(module, &[])
@@ -558,7 +574,7 @@ impl<'a, 'ctx> Backend<'a, 'ctx> {
                 let after_block= self.context.append_basic_block(func, "after_for");
                 self.builder.build_unconditional_branch(loop_block).unwrap();
                 self.builder.position_at_end(loop_block);
-                self.get_value(stats);
+                self.get_value(&stats);
                 
                 self.manual_call(pr(self.module,"llvm.coro.resume"), vec![hdl.as_value_ref()], "".to_owned());
                 let done = self.manual_call(pr(self.module,"llvm.coro.done"), vec![hdl.as_value_ref()], "done".to_owned());
@@ -574,10 +590,10 @@ impl<'a, 'ctx> Backend<'a, 'ctx> {
     }
 
     pub fn get_type(&self, stat: &Statement) -> Option<BasicTypeEnum<'ctx>> {
-        match stat {
-            Statement::VariableDecl(_, ty, assignments) => {
+        match &stat.data {
+            StatementData::VariableDecl(_, ty, assignments) => {
                 let def_ty = if let Some(t) = ty {
-                    Some(Self::convert_type(t, self.context))
+                    Some(Self::convert_type(&t, self.context))
                 } else {
                     None
                 };
@@ -588,70 +604,108 @@ impl<'a, 'ctx> Backend<'a, 'ctx> {
                     if t == assign_ty {
                         return Some(t);
                     } else {
-                        panic!();
+                        let d = Diagnostic::<usize>::error()
+                        .with_message("assigned type isn't compatible with the variable type")
+                        .with_labels(vec![Label::primary(self.current_file, stat.to_rng()),Label::secondary(self.current_file, assignments.to_rng())])
+                        .with_notes(vec![format!("expected {} found {}",t.print_to_string().to_string(), assign_ty.print_to_string().to_string())]);
+                        self.print_error(d,true);
                     }
                 }
                 Some(assign_ty)
             }
-            Statement::Math(l, op, r) => {
-                let get_type = self.get_type(l).unwrap();
-                if get_type == self.get_type(r).unwrap() {
-                    Some(get_type)
+            StatementData::Math(l, op, r) => {
+                let l_ty = self.get_type(&l).unwrap();
+                let r_ty = self.get_type(&r).unwrap();
+                if l_ty == r_ty {
+                    Some(l_ty)
                 } else {
-                    panic!()
+                    let d = Diagnostic::<usize>::error()
+                    .with_message("both operands should of the same type")
+                    .with_labels(vec![Label::primary(self.current_file, stat.to_rng()),
+                    Label::secondary(self.current_file, l.to_rng()).with_message(format!("ty: {}",l_ty.print_to_string())),
+                    Label::secondary(self.current_file, r.to_rng()).with_message(format!("ty: {}",r_ty.print_to_string()))]);
+                    self.print_error(d,true);
+                    None
                 }
             }
-            Statement::Num(_) => Some(BasicTypeEnum::IntType(self.context.i64_type())),
-            Statement::StringLet(s) => Some(BasicTypeEnum::ArrayType(
+            StatementData::Num(_) => Some(BasicTypeEnum::IntType(self.context.i64_type())),
+            StatementData::StringLet(s) => Some(BasicTypeEnum::ArrayType(
                 self.context.i8_type().array_type(s.len() as u32),
             )),
-            Statement::If(cond, stats, else_stats) => {
+            StatementData::If(cond, stats, else_stats) => {
+                if self.get_type(&cond).unwrap() != self.context.bool_type().as_basic_type_enum() {
+                    let d = Diagnostic::<usize>::error()
+                    .with_message("if condition has to be of type i1(bool)")
+                    .with_labels(vec![Label::primary(self.current_file, cond.to_rng())]);
+                    self.print_error(d,true);
+                }
                 let stats_ty = self.get_type(&stats);
                 let else_stats_ty = self.get_type(&else_stats);
 
                 if stats_ty == else_stats_ty {
                     return stats_ty;
                 }else{
-                    panic!()
+                    let d = Diagnostic::<usize>::error()
+                    .with_message("both operands of if should return the same time")
+                    .with_labels(vec![Label::primary(self.current_file, stat.to_rng()),
+                    Label::secondary(self.current_file, stat.to_rng()).with_message(format!("ty: {}",stats_ty.map(|s| s.print_to_string().to_string()).unwrap_or("()".to_string()))),
+                    Label::secondary(self.current_file, else_stats.to_rng()).with_message(format!("ty: {}",else_stats_ty.map(|s| s.print_to_string().to_string()).unwrap_or("()".to_string())))]);
+                    self.print_error(d,true);
+                    None
                 }
             },
-            Statement::Return(s) => self.get_type(s),
-            Statement::Identifier(idenf) => Some(
+            StatementData::Return(s) => self.get_type(&s),
+            StatementData::Identifier(idenf) => Some(
                 self.current_scope
                     .as_ref()
                     .unwrap()
-                    .get_value(idenf)
+                    .get_value(&idenf)
                     .unwrap()
                     .0,
             ),
-            Statement::Assignment(_, _) => todo!(),
-            Statement::Block(stats) => match stats.len() {
+            StatementData::Assignment(_, _) => None,
+            StatementData::Block(stats) => match stats.len() {
                 0 => None,
                 1 => Some(self.get_type(&stats[0]).unwrap()),
                 _ => {
+                    let mut loc = Range { start: 0, end: 0 };
                     let mut ty = None;
                     for s in stats {
-                        let get_type = &self.get_type(s);
+                        let get_type = &self.get_type(&s);
                         if get_type.is_some() {
                             if ty.is_some() {
                                 let other_ty = get_type.unwrap();
                                 if ty.unwrap() != other_ty {
-                                    panic!("all parts of block should return the same type");
+                                    let d = Diagnostic::<usize>::error()
+                                    .with_message("All returns in block should be the same type")
+                                    .with_labels(vec![Label::primary(self.current_file, stat.to_rng()),
+                                    Label::secondary(self.current_file, loc.clone()).with_message(format!("Original Type Assumed here: {}",get_type.unwrap().print_to_string())),
+                                    Label::secondary(self.current_file, s.to_rng()).with_message(format!("this returns type: {}",get_type.unwrap().print_to_string()))]);
+                                    self.print_error(d,true);
                                 }
                             } else {
-                                ty = Some(self.get_type(s)).unwrap();
+                                ty = Some(self.get_type(&s)).unwrap();
+                                loc = s.to_rng();
                             }
                         }
                     }
                     ty
                 }
             },
-            Statement::BoolLet(_) => Some(self.context.bool_type().as_basic_type_enum()),
-            Statement::PreFix(_, s) => self.get_type(&s),
-            Statement::While(_, s) => self.get_type(s),
-            Statement::Break => None,
-            Statement::Continue => None,
-            Statement::Call(s, _) => Some(
+            StatementData::BoolLet(_) => Some(self.context.bool_type().as_basic_type_enum()),
+            StatementData::PreFix(_, s) => self.get_type(&s),
+            StatementData::While(cond, s) => {
+                if self.get_type(&cond).unwrap() != self.context.bool_type().as_basic_type_enum() {
+                    let d = Diagnostic::<usize>::error()
+                    .with_message("if condition has to be of type i1(bool)")
+                    .with_labels(vec![Label::primary(self.current_file, cond.to_rng())]);
+                    self.print_error(d,true);
+                }
+                return self.get_type(&s)
+            },
+            StatementData::Break => None,
+            StatementData::Continue => None,
+            StatementData::Call(s, _) => Some(
                 self.module
                     .get_function(&s)
                     .unwrap()
@@ -659,8 +713,8 @@ impl<'a, 'ctx> Backend<'a, 'ctx> {
                     .get_return_type()
                     .unwrap(),
             ),
-            Statement::Yield(_) => None,
-            Statement::For(_, _, s) => self.get_type(s),
+            StatementData::Yield(_) => None,
+            StatementData::For(_, _, s) => self.get_type(&s),
         }
     }
 
@@ -912,5 +966,14 @@ impl<'a, 'ctx> Backend<'a, 'ctx> {
         };
 
         unsafe { CallSiteValue::new(value) }
+    }
+
+    fn print_error(&self, d:Diagnostic<usize>, exit: bool){  
+        let writer = StandardStream::stderr(ColorChoice::Auto);
+        let config = codespan_reporting::term::Config::default();
+        term::emit(&mut writer.lock(), &config, &self.files, &d).unwrap();
+        if exit{
+            process::exit(1)
+        }
     }
 }

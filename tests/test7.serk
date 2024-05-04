@@ -1,0 +1,9 @@
+fn Something(i64 a) -> i64{
+        var s = true;
+        s = if(20) {
+                return 10;
+        } else{
+                return true;
+                return 0;
+        }
+}

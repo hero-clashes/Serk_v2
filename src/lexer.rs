@@ -57,7 +57,7 @@ pub enum Token {
     Identifier(String),
     #[regex("-?[0-9]+", |lex| lex.slice().parse())]
     Num(i64),
-    #[regex(r#""(.+)""#, |lex| lex.slice().to_string())]
+    #[regex(r#"(".+")"#, |lex| lex.slice()[0..(lex.slice().len()-1)].to_string())]
     StringLet(String),
 
     #[token("(")]

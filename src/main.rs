@@ -2,6 +2,7 @@ pub mod ast;
 pub mod lexer;
 use std::fs;
 
+use codespan_reporting::files::SimpleFiles;
 use lalrpop_util::{lalrpop_mod, ParseError::{ExtraToken, InvalidToken, UnrecognizedEof, UnrecognizedToken, User}};
 
 lalrpop_mod!(pub grammer);
@@ -17,13 +18,15 @@ use argh::FromArgs;
 /// The Serk Complier
 struct Input {
     ///file to be complied/JITed
-    #[argh(option, default = "String::from(\"tests/test6.serk\")")]
+    #[argh(option, default = "String::from(\"tests/test7.serk\")")]
     pub file: String,
 }
 
 fn main() {
     let cli: Input = argh::from_env();
-    let input = fs::read_to_string(cli.file).unwrap();
+    let mut files = SimpleFiles::new();
+    let input = fs::read_to_string(cli.file.clone()).unwrap();
+    let file_id = files.add(cli.file.clone(), input.clone());
     let output = grammer::ModuleParser::new().parse(Lexer::new(&input));
     match output {
         Ok(s) => {
@@ -36,6 +39,8 @@ fn main() {
                 context: &context,
                 builder: &mut builder,
                 current_scope: Some(Box::new(Scope::default())),
+                current_file: file_id,
+                files
             }.gen_code(*s);
             let _ = module.verify().unwrap();
             let exc = module.create_jit_execution_engine(inkwell::OptimizationLevel::None).unwrap();
@@ -54,7 +59,7 @@ fn main() {
         }
     }
 }
-
+#[allow(clippy::unused)]
 use goldentests::{TestConfig, TestResult};
 
 #[test]

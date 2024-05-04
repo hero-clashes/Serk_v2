@@ -1,6 +1,7 @@
 use std::str::FromStr;
 use crate::ast::AST;
 use crate::ast::Statement;
+use crate::ast::StatementData;
 use crate::lexer::*;
 grammar;
 
@@ -48,82 +49,82 @@ Statement: Statement = {
     Block,
     Return,
     While,
-    "break" ";"=> Statement::Break,
-    "continue" ";" => Statement::Continue,
-    "yield" <s: "Identifier"> ";" => Statement::Yield(Box::new(Statement::Identifier(s))),
-    "for" "(" <var:"Identifier"> "in" <func:FunCall> ")" <b:Block> => Statement::For(var,Box::new(func), Box::new(b)),
+    <l:@L> "break"    ";" <r:@R>=> Statement::new((l,r),StatementData::Break),
+    <l:@L> "continue" ";" <r:@R> => Statement::new((l,r),StatementData::Continue),
+    <l:@L> "yield" <sl:@L> <s: "Identifier"> <sr:@R>";" <r:@R>=> Statement::new((l,r),StatementData::Yield(Box::new(Statement::new((sl,sr),StatementData::Identifier(s))))),
+    <l:@L> "for" "(" <var:"Identifier"> "in" <func:FunCall> ")" <b:Block> <r:@R>=> Statement::new((l,r),StatementData::For(var,Box::new(func), Box::new(b))),
 }
 
 
 VariableDecl: Statement = {
-    "var" <s: "Identifier"> <t:TypeDef> "=" <a:Expr> ";" => Statement::VariableDecl(s ,t, Box::new(Statement::Block(vec![a]))),
-    "var" <s: "Identifier"> <t:TypeDef> "=" <a:Statement>     ";" => Statement::VariableDecl(s ,t, Box::new(a)),
-    "var" <s: "Identifier"> <t:TypeDef>                   ";" => Statement::VariableDecl(s ,t, Box::new(Statement::Block(vec![]))),
+    <l:@L> "var" <s: "Identifier"> <t:TypeDef> "=" <a:Expr> ";"  <r:@R>=> Statement::new((l,r),StatementData::VariableDecl(s ,t, Box::new(Statement::new((l,r),StatementData::Block(vec![a]))))),
+    <l:@L>"var" <s: "Identifier"> <t:TypeDef> "=" <a:Statement> <r:@R>=> Statement::new((l,r),StatementData::VariableDecl(s ,t, Box::new(a))),
+    <l:@L> "var" <s: "Identifier"> <t:TypeDef>                   ";" <r:@R>=> Statement::new((l,r),StatementData::VariableDecl(s ,t, Box::new(Statement::new((l,r),StatementData::Block(vec![]))))),
 }
 
 TypeDef: Option<String> = {
     (":" <"Identifier">)? => <>.map(|s| s)
 }
 Block: Statement = {
-    "{" <m:Statements> "}" => Statement::Block(m)
+    <l:@L> "{" <m:Statements> "}" <r:@R>=> Statement::new((l,r),StatementData::Block(m))
 }
 
 Expr: Statement = {
     #[precedence(level="0")] 
     Term,
     #[precedence(level="1")] #[assoc(side="right")]
-    "!" <e:Expr> => Statement::PreFix('!',Box::new(e)),
-    "-" <e:Expr> => Statement::PreFix('-',Box::new(e)),
+    <l:@L> "!" <e:Expr> <r:@R>=> Statement::new((l,r),StatementData::PreFix('!',Box::new(e))),
+    <l:@L> "-" <e:Expr><r:@R> => Statement::new((l,r),StatementData::PreFix('-',Box::new(e))),
     #[precedence(level="2")] #[assoc(side="left")]
-    <l:Expr> "*" <r:Expr> => Statement::Math(Box::new(l),'*',Box::new(r)),
-    <l:Expr> "/" <r:Expr> => Statement::Math(Box::new(l),'/',Box::new(r)),
+    <left:@L> <l:Expr> "*" <r:Expr> <right:@R>=> Statement::new((left,right),StatementData::Math(Box::new(l),'*',Box::new(r))),
+    <left:@L> <l:Expr> "/" <r:Expr> <right:@R>=> Statement::new((left,right),StatementData::Math(Box::new(l),'/',Box::new(r))),
     #[precedence(level="3")] #[assoc(side="left")]
-    <l:Expr> "+" <r:Expr> => Statement::Math(Box::new(l),'+',Box::new(r)),
-    <l:Expr> "-" <r:Expr> => Statement::Math(Box::new(l),'-',Box::new(r)),
-    <l:Expr> "==" <r:Expr> => Statement::Math(Box::new(l),'e',Box::new(r)),
-    <l:Expr> "!=" <r:Expr> => Statement::Math(Box::new(l),'n',Box::new(r)),
-    <l:Expr> "&&" <r:Expr> => Statement::Math(Box::new(l),'a',Box::new(r)),
-    <l:Expr> "||" <r:Expr> => Statement::Math(Box::new(l),'o',Box::new(r)),
-    <l:Expr> "<" <r:Expr>  => Statement::Math(Box::new(l),'l',Box::new(r)),
-    <l:Expr> "<=" <r:Expr> => Statement::Math(Box::new(l),'p',Box::new(r)),
-    <l:Expr> ">" <r:Expr>  => Statement::Math(Box::new(l),'g',Box::new(r)),
-    <l:Expr> ">=" <r:Expr> => Statement::Math(Box::new(l),'q',Box::new(r)),
+    <left:@L> <l:Expr> "+" <r:Expr> <right:@R>=> Statement::new((left,right),StatementData::Math(Box::new(l),'+',Box::new(r))),
+    <left:@L> <l:Expr> "-" <r:Expr> <right:@R>=> Statement::new((left,right),StatementData::Math(Box::new(l),'-',Box::new(r))),
+    <left:@L> <l:Expr> "==" <r:Expr> <right:@R>=> Statement::new((left,right),StatementData::Math(Box::new(l),'e',Box::new(r))),
+    <left:@L> <l:Expr> "!=" <r:Expr> <right:@R>=> Statement::new((left,right),StatementData::Math(Box::new(l),'n',Box::new(r))),
+    <left:@L> <l:Expr> "&&" <r:Expr> <right:@R>=> Statement::new((left,right),StatementData::Math(Box::new(l),'a',Box::new(r))),
+    <left:@L> <l:Expr> "||" <r:Expr> <right:@R>=> Statement::new((left,right),StatementData::Math(Box::new(l),'o',Box::new(r))),
+    <left:@L> <l:Expr> "<" <r:Expr>  <right:@R>=> Statement::new((left,right),StatementData::Math(Box::new(l),'l',Box::new(r))),
+    <left:@L> <l:Expr> "<=" <r:Expr> <right:@R>=> Statement::new((left,right),StatementData::Math(Box::new(l),'p',Box::new(r))),
+    <left:@L> <l:Expr> ">" <r:Expr>  <right:@R>=> Statement::new((left,right),StatementData::Math(Box::new(l),'g',Box::new(r))),
+    <left:@L> <l:Expr> ">=" <r:Expr> <right:@R>=> Statement::new((left,right),StatementData::Math(Box::new(l),'q',Box::new(r))),
 
 }
 
 
 Term: Statement = {
     #[precedence(level="0")] 
-    "Num" => Statement::Num(<>),
-    "true"=> Statement::BoolLet(true), 
-    "false" => Statement::BoolLet(false),
-    "stringlet" => Statement::StringLet(<>),
+    <l:@L> <n:"Num"> <r:@R>=> Statement::new((l,r),StatementData::Num(n)),
+    <l:@L> "true" <r:@R>=> Statement::new((l,r),StatementData::BoolLet(true)), 
+    <l:@L> "false" <r:@R>=> Statement::new((l,r),StatementData::BoolLet(false)),
+    <l:@L> <slet:"stringlet"> <r:@R>=> Statement::new((l,r),StatementData::StringLet(slet)),
     FunCall,
     #[precedence(level="1")] 
-    "Identifier" => Statement::Identifier(<>),
+    <l:@L> <i:"Identifier"> <r:@R>=> Statement::new((l,r),StatementData::Identifier(i)),
     "("  <Expr> ")" => <> ,
 }
 
- FunCall: Statement = {<"Identifier"> "(" <OneOrMore<Expr>> ")" => Statement::Call(<>)}
+ FunCall: Statement = {<l:@L> <i:"Identifier"> "(" <args:OneOrMore<Expr>> ")" <r:@R>=> Statement::new((l,r),StatementData::Call(i,args))}
 
 If: Statement = {
-    "if" "(" <condition:Expr> ")" <stats: Block> <el: Else?> => Statement::If(Box::new(condition), Box::new(stats), Box::new(el.unwrap_or(Statement::Block(vec![]))))
+    <l:@L>"if" "(" <condition:Expr> ")" <stats: Block> <el: Else?> <r:@R>=> Statement::new((l,r),StatementData::If(Box::new(condition), Box::new(stats), Box::new(el.unwrap_or(Statement::new((l,r),StatementData::Block(vec![]))))))
 }
 Else: Statement = {
     "else" <Block> => <>
 }
 Return: Statement = {
-    "return" <Expr> ";"=> Statement::Return(Box::new(<>)),
+    <l:@L> "return" <e:Expr> ";" <r:@R>=> Statement::new((l,r),StatementData::Return(Box::new(e))),
 }
 
 Assignment: Statement = {
-    <name:"Identifier"> "=" <es:Statement> => Statement::Assignment(name.to_string(), Box::new(es)),
-    <name:"Identifier"> "=" <e:Expr>   ";"  => Statement::Assignment(name.to_string(), Box::new(Statement::Block(vec![e]))),    
+    <l:@L> <name:"Identifier"> "=" <es:Statement> <r:@R> => Statement::new((l,r),StatementData::Assignment(name.to_string(), Box::new(es))),
+    <l:@L> <name:"Identifier"> "="  <le:@L> <e:Expr>  <re:@R> ";" <r:@R>  => Statement::new((l,r),StatementData::Assignment(name.to_string(), Box::new(Statement::new((le,re),StatementData::Block(vec![e]))))),    
 }
 
 While: Statement = {
-    "while" <e:Expr> <s:Statement> => Statement::While(Box::new(e), Box::new(s)),
-    "loop" <Statement> => Statement::While(Box::new(Statement::BoolLet(true)),Box::new(<>)),
+    <l:@L> "while" <e:Expr> <s:Statement> <r:@R> => Statement::new((l,r),StatementData::While(Box::new(e), Box::new(s))),
+    <l:@L> "loop" <s:Statement> <r:@R> => Statement::new((l,r),StatementData::While(Box::new(Statement::new((l,r),StatementData::BoolLet(true))),Box::new(s))),
 }
 
 extern {
