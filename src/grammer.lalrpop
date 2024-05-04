@@ -1,21 +1,22 @@
 use std::str::FromStr;
 use crate::ast::AST;
+use crate::ast::ASTData;
 use crate::ast::Statement;
 use crate::ast::StatementData;
 use crate::lexer::*;
 grammar;
 
 pub Module: Box<AST>={
-    <items: ModuleItem*> => Box::new(AST::Module(items))
+    <l:@L> <items: ModuleItem*> <r:@R>=> Box::new(AST::new((l,r),ASTData::Module(items)))
 }
 
 ModuleItem: Box<AST>={
-    "gen" <s:"Identifier"> "(" <l: Comma<Pair>> ")" "->" <t:"Identifier"> <m:Block> => Box::new(AST::GenFunction(Box::new(AST::Function(s, t,l, m)))),
+    <ls:@L> "gen" <s:"Identifier"> "(" <l: Comma<Pair>> ")" "->" <t:"Identifier"> <m:Block> <r:@R>=> Box::new(AST::new((ls,r),ASTData::GenFunction(Box::new(ASTData::Function(s, t,l, m))))),
     Function
 };
 
-Function: Box<AST> = {"fn" <s:"Identifier"> "(" <l: Comma<Pair>> ")" "->" <t:"Identifier"> <m:Block> => Box::new(AST::Function(s, t,l, m)),
-                      "fn" <s:"Identifier"> "(" <l: Comma<Pair>> ")" <m:Block> => Box::new(AST::Function(s, "()".to_string() ,l, m))
+Function: Box<AST> = {<ls:@L> "fn" <s:"Identifier"> "(" <l: Comma<Pair>> ")" "->" <t:"Identifier"> <m:Block> <r:@R>=> Box::new(AST::new((ls,r),ASTData::Function(s, t,l, m))),
+                      <ls:@L> "fn" <s:"Identifier"> "(" <l: Comma<Pair>> ")" <m:Block> <r:@R>=> Box::new(AST::new((ls,r),ASTData::Function(s, "()".to_string() ,l, m)))
                       }
 
 Pair:(String, String) = {<l:"Identifier"> <r:"Identifier"> => (l,r)}
@@ -51,12 +52,13 @@ Statement: Statement = {
     While,
     <l:@L> "break"    ";" <r:@R>=> Statement::new((l,r),StatementData::Break),
     <l:@L> "continue" ";" <r:@R> => Statement::new((l,r),StatementData::Continue),
-    <l:@L> "yield" <sl:@L> <s: "Identifier"> <sr:@R>";" <r:@R>=> Statement::new(
+    <l:@L> "yield" <e: Expr>";" <r:@R>=> Statement::new(
         (l, r),
-        StatementData::Yield(Box::new(Statement::new(
-            (sl, sr),
-            StatementData::Identifier(s),
-        ))),
+        StatementData::Yield(Some(Box::new(e))),
+    ),
+    <l:@L> "yield" ";" <r:@R>=> Statement::new(
+        (l, r),
+        StatementData::Yield(None),
     ),
     <l:@L> "for" "(" <var:"Identifier"> "in" <func:FunCall> ")" <b:Block> <r:@R>=> Statement::new((l,r),StatementData::For(var,Box::new(func), Box::new(b))),
 }
@@ -138,7 +140,8 @@ Else: Statement = {
     "else" <Block> => <>
 }
 Return: Statement = {
-    <l:@L> "return" <e:Expr> ";" <r:@R>=> Statement::new((l,r),StatementData::Return(Box::new(e))),
+    <l:@L> "return" <e:Expr> ";" <r:@R>=> Statement::new((l,r),StatementData::Return(Some(Box::new(e)))),
+    <l:@L> "return" ";" <r:@R>=> Statement::new((l,r),StatementData::Return(None)),
 }
 
 Assignment: Statement = {

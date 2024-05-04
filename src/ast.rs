@@ -170,7 +170,7 @@ pub enum StatementData {
     Num(i64),
     StringLet(String),
     If(Box<Statement>, Box<Statement>, Box<Statement>),
-    Return(Box<Statement>),
+    Return(Option<Box<Statement>>),
     Identifier(String),
     Assignment(String, Box<Statement>),
     Block(Vec<Statement>),
@@ -180,15 +180,28 @@ pub enum StatementData {
     Break,
     Continue,
     Call(String, Vec<Statement>),
-    Yield(Box<Statement>),
+    Yield(Option<Box<Statement>>),
     For(String, Box<Statement>, Box<Statement>)
 }
 
 #[derive(Debug)]
-pub enum AST {
+pub struct AST{
+    data: ASTData,
+    loc: (usize,usize)
+}
+impl AST{
+    pub fn new(loc: (usize,usize),data: ASTData) -> Self {
+        Self { data, loc }
+    }
+    pub fn to_rng(&self) -> Range<usize>{
+        self.loc.0..self.loc.1
+    }
+}
+#[derive(Debug)]
+pub enum ASTData {
     Module(Vec<Box<AST>>),
     Function(String, String, Vec<(String, String)>, Statement),
-    GenFunction(Box<AST>),
+    GenFunction(Box<ASTData>),
 }
 
 static INT_TYPE: Lazy<Regex> = Lazy::new(|| Regex::new(r"[ui]([0-9]+)").unwrap());
@@ -368,24 +381,28 @@ impl<'a, 'ctx> Backend<'a, 'ctx> {
                 None
             }
             StatementData::Return(s) => {
-                let get_value = self.get_value(&s).unwrap();
+                if let Some(s) = s{
+                    let get_value = self.get_value(&s).unwrap();
 
-                let get_assign = &self.current_scope.as_ref().unwrap().get_assign();
-                if get_assign.is_none() {
-                    self.builder.build_return(Some(&get_value)).unwrap();
-                } else {
-                    self.builder
-                        .build_store(
-                            self.current_scope
-                                .as_ref()
-                                .unwrap()
-                                .get_value(get_assign.as_ref().unwrap())
-                                .unwrap()
-                                .1
-                                .into_pointer_value(),
-                            get_value,
-                        )
-                        .unwrap();
+                    let get_assign = &self.current_scope.as_ref().unwrap().get_assign();
+                    if get_assign.is_none() {
+                        self.builder.build_return(Some(&get_value)).unwrap();
+                    } else {
+                        self.builder
+                            .build_store(
+                                self.current_scope
+                                    .as_ref()
+                                    .unwrap()
+                                    .get_value(get_assign.as_ref().unwrap())
+                                    .unwrap()
+                                    .1
+                                    .into_pointer_value(),
+                                get_value,
+                            )
+                            .unwrap();
+                    }
+                }else{
+                    self.builder.build_return(None);
                 }
                 None
             }
@@ -406,29 +423,19 @@ impl<'a, 'ctx> Backend<'a, 'ctx> {
             }
             StatementData::Assignment(name, s) => {
                 Scope::open_scope(&mut self.current_scope, ScopeTy::Assign(name.to_string()));
-                if let Some(val) = self.get_value(&s) {
-                    self.builder
-                        .build_store(
-                            self.current_scope
-                                .as_ref()
-                                .unwrap()
-                                .get_value(&name)
-                                .unwrap()
-                                .1
-                                .into_pointer_value(),
-                            val,
-                        )
-                        .unwrap();
-                } else {
-                    match self.get_type(&s){
-                        Some(s) => {
-                            if self.current_scope.as_ref().unwrap().get_value(&name).unwrap().0 != s{
-                                panic!()
-                            }
-                        },
-                        None => panic!(),
-                    }
-                };
+                let val  = self.get_value(&s).unwrap();
+                self.builder
+                    .build_store(
+                        self.current_scope
+                            .as_ref()
+                            .unwrap()
+                            .get_value(&name)
+                            .unwrap()
+                            .1
+                            .into_pointer_value(),
+                        val,
+                    )
+                    .unwrap();
                 self.current_scope.as_mut().unwrap().ty = ScopeTy::default();
                 Scope::close_scope(&mut self.current_scope);
                 None
@@ -544,10 +551,14 @@ impl<'a, 'ctx> Backend<'a, 'ctx> {
             }
             StatementData::Yield(s) => {
                 let current_func = self.current_scope.as_ref().unwrap().get_function().unwrap();
-                let value = self.get_value(&s).unwrap();
+
+                if let Some(s) = s{
+                    let value = self.get_value(&s).unwrap();
+                    let GenFunction { co_suspend, suspend_block, cleanup_block, promise } = self.current_scope.as_ref().unwrap().get_gen_function().unwrap();
+                    self.builder.build_store(promise, value).unwrap();
+                }
                 let GenFunction { co_suspend, suspend_block, cleanup_block, promise } = self.current_scope.as_ref().unwrap().get_gen_function().unwrap();
-                self.builder.build_store(promise, value).unwrap();
-                
+
                 let next_block = self.context.append_basic_block(current_func, "next_block");
                 let token_none = unsafe { LLVMConstNull(LLVMTokenTypeInContext(self.context.as_ctx_ref())) };
                 
@@ -569,7 +580,8 @@ impl<'a, 'ctx> Backend<'a, 'ctx> {
                     .unwrap()
                     .get_declaration(module, &[])
                     .unwrap()})(self.module, "llvm.coro.promise"), &[hdl.as_basic_value_enum().into(), self.context.i32_type().const_int(8, false).into(), self.context.bool_type().const_int(0, false).into()], "promise_addr").unwrap().try_as_basic_value().left().unwrap();
-                self.current_scope.as_mut().unwrap().set_value(var.to_string(), Self::convert_type(&"i64".to_owned(), &self.context), value); //TODO implement type
+                let ty = self.convert_type(&"i64".to_owned());
+                self.current_scope.as_mut().unwrap().set_value(var.to_string(), ty, value); //TODO implement type
                 let loop_block = self.context.append_basic_block(func, "for_block");
                 let after_block= self.context.append_basic_block(func, "after_for");
                 self.builder.build_unconditional_branch(loop_block).unwrap();
@@ -593,7 +605,7 @@ impl<'a, 'ctx> Backend<'a, 'ctx> {
         match &stat.data {
             StatementData::VariableDecl(_, ty, assignments) => {
                 let def_ty = if let Some(t) = ty {
-                    Some(Self::convert_type(&t, self.context))
+                    Some(self.convert_type(&t))
                 } else {
                     None
                 };
@@ -654,7 +666,26 @@ impl<'a, 'ctx> Backend<'a, 'ctx> {
                     None
                 }
             },
-            StatementData::Return(s) => self.get_type(&s),
+            StatementData::Return(s) => {
+                let f = self.current_scope.as_ref().unwrap().get_function().unwrap();
+                let ty = if s.is_some(){self.get_type(&s.as_ref().unwrap())} else{None};
+                
+                let get_return_type = f.get_type().get_return_type();
+
+                if let Some(s) = s{
+                    
+                    if get_return_type != ty{
+                        let d = Diagnostic::<usize>::error()
+                        .with_message("Return Ty don't match function signature")
+                        .with_labels(vec![Label::primary(self.current_file, stat.to_rng())])
+                        .with_notes(vec![format!("function returns type is {}, the return statement type is {}",get_return_type.map(|s| s.print_to_string().to_string()).unwrap_or("()".to_string()),ty.map(|s| s.print_to_string().to_string()).unwrap_or("()".to_string()))]);
+                        self.print_error(d,true);
+                    }
+                }
+
+
+                None
+            },
             StatementData::Identifier(idenf) => Some(
                 self.current_scope
                     .as_ref()
@@ -663,7 +694,31 @@ impl<'a, 'ctx> Backend<'a, 'ctx> {
                     .unwrap()
                     .0,
             ),
-            StatementData::Assignment(_, _) => None,
+            StatementData::Assignment(name, s) => {
+                match self.get_type(&s){
+                    Some(s) => {
+                        let basic_type_enum = self.current_scope.as_ref().unwrap().get_value(&name).unwrap().0;
+                        if basic_type_enum != s{
+                            let d = Diagnostic::<usize>::error()
+                            .with_message("Assign Ty doesn't match the variable ty")
+                            .with_labels(vec![Label::primary(self.current_file, stat.to_rng())])
+                            .with_notes(vec![format!("Variable type is {}, the return statement type is {}",basic_type_enum.print_to_string(),s.print_to_string())]);
+                            self.print_error(d,true);
+                            return None;
+                        }
+                    },
+                    None => {
+                        let d = Diagnostic::<usize>::error()
+                            .with_message("Can't Assign to a variable with an void type statement")
+                            .with_labels(vec![Label::primary(self.current_file, stat.to_rng())]);
+                            self.print_error(d,true);
+                            return None;
+
+                        return None;
+                    },
+                }
+                None
+            },
             StatementData::Block(stats) => match stats.len() {
                 0 => None,
                 1 => Some(self.get_type(&stats[0]).unwrap()),
@@ -713,33 +768,53 @@ impl<'a, 'ctx> Backend<'a, 'ctx> {
                     .get_return_type()
                     .unwrap(),
             ),
-            StatementData::Yield(_) => None,
+            StatementData::Yield(s) => {
+                // if let Some(s) = s{
+                //     let f = self.current_scope.as_ref().unwrap().get_function().unwrap();
+                //     let ty = self.get_type(&s).unwrap();
+                    
+                //     let get_return_type = f.get_type().get_return_type();
+                //     if get_return_type != Some(ty){
+                //         let d = Diagnostic::<usize>::error()
+                //         .with_message("Return Ty don't match function signature")
+                //         .with_labels(vec![Label::primary(self.current_file, stat.to_rng())])
+                //         .with_notes(vec![format!("function returns type is {}, the return statement type is {}",get_return_type.unwrap().print_to_string(),ty.print_to_string())]);
+                //         self.print_error(d,true);
+                //     }
+                // }//TODO fix this since coroutines stores return data differently
+
+
+                None
+            },
             StatementData::For(_, _, s) => self.get_type(&s),
         }
     }
 
-    pub fn convert_type(ty: &String, context: &'ctx Context) -> BasicTypeEnum<'ctx> {
+    pub fn convert_type(&self, ty: &String) -> BasicTypeEnum<'ctx> {
         if let Some(c) = INT_TYPE.captures(&ty) {
-            return BasicTypeEnum::IntType(context.custom_width_int_type(
+            return BasicTypeEnum::IntType(self.context.custom_width_int_type(
                 u32::from_str_radix(c.get(1).unwrap().as_str(), 10).unwrap(),
             ));
         }
 
         if let Some(c) = FLOAT_TYPE.captures(&ty) {
             match c.get(1).unwrap().as_str() {
-                "f16" => return BasicTypeEnum::FloatType(context.f16_type()),
-                "f32" => return BasicTypeEnum::FloatType(context.f32_type()),
-                "f64" => return BasicTypeEnum::FloatType(context.f64_type()),
-                "f128" => return BasicTypeEnum::FloatType(context.f128_type()),
-                _ => panic!(),
+                "f16" => return BasicTypeEnum::FloatType(self.context.f16_type()),
+                "f32" => return BasicTypeEnum::FloatType(self.context.f32_type()),
+                "f64" => return BasicTypeEnum::FloatType(self.context.f64_type()),
+                "f128" => return BasicTypeEnum::FloatType(self.context.f128_type()),
+                _ => {},
             }
         }
 
         if ty == "bool" {
-            return context.bool_type().as_basic_type_enum();
+            return self.context.bool_type().as_basic_type_enum();
         }
 
-        panic!("Can't Find Type {ty}");
+        let d = Diagnostic::<usize>::error()
+        .with_message(format!("Can't find type {ty}"));
+        self.print_error(d,true);
+        panic!();
     }
 
     pub fn convert_type_to_func(
@@ -751,15 +826,15 @@ impl<'a, 'ctx> Backend<'a, 'ctx> {
             return self.context.void_type().fn_type(
                 &args
                     .into_iter()
-                    .map(|a| Self::convert_type(&a.0, self.context).into())
+                    .map(|a| self.convert_type(&a.0).into())
                     .collect::<Vec<_>>(),
                 false,
             );
         } else {
-            return Self::convert_type(ty, self.context).fn_type(
+            return self.convert_type(ty).fn_type(
                 &args
                     .into_iter()
-                    .map(|a| Self::convert_type(&a.0, self.context).into())
+                    .map(|a| self.convert_type(&a.0).into())
                     .collect::<Vec<_>>(),
                 false,
             );
@@ -767,8 +842,9 @@ impl<'a, 'ctx> Backend<'a, 'ctx> {
     }
 
     pub fn gen_code(&mut self, ast: AST) {
-        match ast {
-            AST::Function(name, ty_name, args, stats) => {
+        let loc = ast.to_rng();
+        match ast.data {
+            ASTData::Function(name, ty_name, args, stats) => {
                 let ty = self.convert_type_to_func(&ty_name, &args);
                 let func = self.module.add_function(&name, ty, None);
                 let basic_block = self.context.append_basic_block(func, "entry");
@@ -778,7 +854,7 @@ impl<'a, 'ctx> Backend<'a, 'ctx> {
                 self.current_scope.as_mut().unwrap().current_func = Some(func);
                 for (i, arg) in args.iter().enumerate() {
                     let param = func.get_nth_param(i as u32).unwrap();
-                    let ty = Self::convert_type(&arg.0, self.context);
+                    let ty = self.convert_type(&arg.0);
                     let ass_alloca = self.builder.build_alloca(ty, &arg.1).unwrap();
                     self.current_scope.as_mut().unwrap().set_value(
                         arg.0.clone(),
@@ -788,7 +864,7 @@ impl<'a, 'ctx> Backend<'a, 'ctx> {
                     self.builder.build_store(ass_alloca, param).unwrap();
                     self.current_scope.as_mut().unwrap().set_value(arg.1.to_owned(), ty, ass_alloca.as_basic_value_enum());
                 }
-
+                self.get_type(&stats);
                 self.get_value(&stats);
 
                 if func
@@ -800,13 +876,16 @@ impl<'a, 'ctx> Backend<'a, 'ctx> {
                     if ty_name == "()"{
                         self.builder.build_return(None).unwrap();
                     }else{
-                        panic!("function doesn't have terminator");
+                        let d = Diagnostic::<usize>::error()
+                        .with_message(format!("Function \"{}\" Doesn't have terminator",name))
+                        .with_labels(vec![Label::primary(self.current_file, loc)]);
+                        self.print_error(d,true);
                     }
                 };
                 Scope::close_scope(&mut self.current_scope);
                 func.verify(true);
             }
-            AST::Module(l) => {
+            ASTData::Module(l) => {
                 let malloc = self.module.add_function("malloc", self.context.i8_type().ptr_type(AddressSpace::default()).fn_type(&[self.context.i64_type().into()], false), None);
                 Target::initialize_x86(&InitializationConfig::default());
                 let get_default_triple = TargetMachine::get_default_triple();
@@ -832,12 +911,12 @@ impl<'a, 'ctx> Backend<'a, 'ctx> {
                 self.module.print_to_file("b.ir");
    
             }
-            AST::GenFunction(f) => {
-                if let AST::Function(name, ty_name, args, stats) = *f {
+            ASTData::GenFunction(f) => {
+                if let ASTData::Function(name, ty_name, args, stats) = *f {
                     let ty = self.context.i8_type().ptr_type(AddressSpace::default()).fn_type(
                         &args.clone()
                             .into_iter()
-                            .map(|a| Self::convert_type(&a.0, self.context).into())
+                            .map(|a| self.convert_type(&a.0).into())
                             .collect::<Vec<_>>(), false);
                     let func = self.module.add_function(&name, ty, None);
                     let basic_block = self.context.append_basic_block(func, "entry");
@@ -863,7 +942,7 @@ impl<'a, 'ctx> Backend<'a, 'ctx> {
                     let promise = self
                         .builder
                         .build_alloca(
-                            Self::convert_type(&ty_name,&self.context).as_basic_type_enum(),
+                            self.convert_type(&ty_name).as_basic_type_enum(),
                             "promise",
                         )
                         .unwrap();
@@ -908,7 +987,7 @@ impl<'a, 'ctx> Backend<'a, 'ctx> {
                     self.current_scope.as_mut().unwrap().current_func = Some(func);
                     for (i, arg) in args.iter().enumerate() {
                         let param = func.get_nth_param(i as u32).unwrap();
-                        let ty = Self::convert_type(&arg.0, self.context);
+                        let ty = self.convert_type(&arg.0);
                         let ass_alloca = self.builder.build_alloca(ty, &arg.1).unwrap();
                         self.current_scope.as_mut().unwrap().set_value(
                             arg.0.clone(),
@@ -918,6 +997,7 @@ impl<'a, 'ctx> Backend<'a, 'ctx> {
                         self.builder.build_store(ass_alloca, param).unwrap();
                         self.current_scope.as_mut().unwrap().set_value(arg.1.to_owned(), ty, ass_alloca.as_basic_value_enum());
                     }
+                    self.get_type(&stats);
                     self.get_value(&stats);
                     Scope::close_scope(&mut self.current_scope);
 

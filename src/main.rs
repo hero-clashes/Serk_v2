@@ -59,7 +59,7 @@ fn main() {
         }
     }
 }
-#[allow(clippy::unused)]
+#[allow(clippy::all)]
 use goldentests::{TestConfig, TestResult};
 
 #[test]
