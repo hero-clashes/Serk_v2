@@ -476,7 +476,12 @@ impl<'a, 'ctx> Backend<'a, 'ctx> {
                             .as_basic_value_enum(),
                     )
                 }
-                _ => panic!(),
+                _ => {
+                    let d = Diagnostic::<usize>::error()
+                    .with_message(format!("Unknown Prefix Operator: \"{p}\""))
+                    .with_labels(vec![Label::primary(self.current_file, stat.to_rng())]);
+                    self.print_error(d);
+                },
             },
             StatementData::While(cond, stats) => {
                 let function = self.current_scope.as_ref().unwrap().get_function().unwrap();
@@ -518,7 +523,10 @@ impl<'a, 'ctx> Backend<'a, 'ctx> {
                         .build_unconditional_branch(after_block)
                         .unwrap();
                 } else {
-                    panic!()
+                    let d = Diagnostic::<usize>::error()
+                    .with_message("can't use Break outside of While loop")
+                    .with_labels(vec![Label::primary(self.current_file, stat.to_rng())]);
+                    self.print_error(d);
                 };
 
                 None
@@ -531,7 +539,10 @@ impl<'a, 'ctx> Backend<'a, 'ctx> {
                 {
                     self.builder.build_unconditional_branch(cond_block).unwrap();
                 } else {
-                    panic!()
+                    let d = Diagnostic::<usize>::error()
+                    .with_message("can't use Continue outside of While loop")
+                    .with_labels(vec![Label::primary(self.current_file, stat.to_rng())]);
+                    self.print_error(d);
                 };
 
                 None
@@ -637,7 +648,6 @@ impl<'a, 'ctx> Backend<'a, 'ctx> {
                     Label::secondary(self.current_file, l.to_rng()).with_message(format!("ty: {}",l_ty.print_to_string())),
                     Label::secondary(self.current_file, r.to_rng()).with_message(format!("ty: {}",r_ty.print_to_string()))]);
                     self.print_error(d);
-                    None
                 }
             }
             StatementData::Num(_) => Some(BasicTypeEnum::IntType(self.context.i64_type())),
@@ -663,7 +673,6 @@ impl<'a, 'ctx> Backend<'a, 'ctx> {
                     Label::secondary(self.current_file, stat.to_rng()).with_message(format!("ty: {}",stats_ty.map(|s| s.print_to_string().to_string()).unwrap_or("()".to_string()))),
                     Label::secondary(self.current_file, else_stats.to_rng()).with_message(format!("ty: {}",else_stats_ty.map(|s| s.print_to_string().to_string()).unwrap_or("()".to_string())))]);
                     self.print_error(d);
-                    None
                 }
             },
             StatementData::Return(s) => {
@@ -711,15 +720,13 @@ impl<'a, 'ctx> Backend<'a, 'ctx> {
                             .with_labels(vec![Label::primary(self.current_file, stat.to_rng())])
                             .with_notes(vec![format!("Variable type is {}, the return statement type is {}",basic_type_enum.print_to_string(),s.print_to_string())]);
                             self.print_error(d);
-                            return None;
                         }
                     },
                     None => {
                         let d = Diagnostic::<usize>::error()
                             .with_message("Can't Assign to a variable with an void type statement")
                             .with_labels(vec![Label::primary(self.current_file, stat.to_rng())]);
-                            self.print_error(d);
-                        return None;
+                        self.print_error(d);
                     },
                 }
                 None
@@ -819,7 +826,7 @@ impl<'a, 'ctx> Backend<'a, 'ctx> {
         let d = Diagnostic::<usize>::error()
         .with_message(format!("Can't find type {ty}"));
         self.print_error(d);
-        panic!();
+
     }
 
     pub fn convert_type_to_func(
@@ -1025,9 +1032,7 @@ impl<'a, 'ctx> Backend<'a, 'ctx> {
                     func.verify(true);
                     let s = "presplitcoroutine".to_string();
                     func.add_attribute(inkwell::attributes::AttributeLoc::Function, self.context.create_enum_attribute(unsafe { LLVMGetEnumAttributeKindForName(s.as_ptr() as *const i8, s.len()) }, 0))
-                } else {
-                    panic!()
-                };
+                } else {};
             }
         }
     }
@@ -1053,7 +1058,7 @@ impl<'a, 'ctx> Backend<'a, 'ctx> {
         unsafe { CallSiteValue::new(value) }
     }
 
-    fn print_error(&self, d:Diagnostic<usize>){  
+    fn print_error(&self, d:Diagnostic<usize>) -> !{  
         let writer = StandardStream::stderr(ColorChoice::Auto);
         let config = codespan_reporting::term::Config::default();
         term::emit(&mut writer.lock(), &config, &self.files, &d).unwrap();
