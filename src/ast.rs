@@ -620,7 +620,7 @@ impl<'a, 'ctx> Backend<'a, 'ctx> {
                         .with_message("assigned type isn't compatible with the variable type")
                         .with_labels(vec![Label::primary(self.current_file, stat.to_rng()),Label::secondary(self.current_file, assignments.to_rng())])
                         .with_notes(vec![format!("expected {} found {}",t.print_to_string().to_string(), assign_ty.print_to_string().to_string())]);
-                        self.print_error(d,true);
+                        self.print_error(d);
                     }
                 }
                 Some(assign_ty)
@@ -636,7 +636,7 @@ impl<'a, 'ctx> Backend<'a, 'ctx> {
                     .with_labels(vec![Label::primary(self.current_file, stat.to_rng()),
                     Label::secondary(self.current_file, l.to_rng()).with_message(format!("ty: {}",l_ty.print_to_string())),
                     Label::secondary(self.current_file, r.to_rng()).with_message(format!("ty: {}",r_ty.print_to_string()))]);
-                    self.print_error(d,true);
+                    self.print_error(d);
                     None
                 }
             }
@@ -649,7 +649,7 @@ impl<'a, 'ctx> Backend<'a, 'ctx> {
                     let d = Diagnostic::<usize>::error()
                     .with_message("if condition has to be of type i1(bool)")
                     .with_labels(vec![Label::primary(self.current_file, cond.to_rng())]);
-                    self.print_error(d,true);
+                    self.print_error(d);
                 }
                 let stats_ty = self.get_type(&stats);
                 let else_stats_ty = self.get_type(&else_stats);
@@ -662,7 +662,7 @@ impl<'a, 'ctx> Backend<'a, 'ctx> {
                     .with_labels(vec![Label::primary(self.current_file, stat.to_rng()),
                     Label::secondary(self.current_file, stat.to_rng()).with_message(format!("ty: {}",stats_ty.map(|s| s.print_to_string().to_string()).unwrap_or("()".to_string()))),
                     Label::secondary(self.current_file, else_stats.to_rng()).with_message(format!("ty: {}",else_stats_ty.map(|s| s.print_to_string().to_string()).unwrap_or("()".to_string())))]);
-                    self.print_error(d,true);
+                    self.print_error(d);
                     None
                 }
             },
@@ -679,7 +679,7 @@ impl<'a, 'ctx> Backend<'a, 'ctx> {
                         .with_message("Return Ty don't match function signature")
                         .with_labels(vec![Label::primary(self.current_file, stat.to_rng())])
                         .with_notes(vec![format!("function returns type is {}, the return statement type is {}",get_return_type.map(|s| s.print_to_string().to_string()).unwrap_or("()".to_string()),ty.map(|s| s.print_to_string().to_string()).unwrap_or("()".to_string()))]);
-                        self.print_error(d,true);
+                        self.print_error(d);
                     }
                 }
 
@@ -703,7 +703,7 @@ impl<'a, 'ctx> Backend<'a, 'ctx> {
                             .with_message("Assign Ty doesn't match the variable ty")
                             .with_labels(vec![Label::primary(self.current_file, stat.to_rng())])
                             .with_notes(vec![format!("Variable type is {}, the return statement type is {}",basic_type_enum.print_to_string(),s.print_to_string())]);
-                            self.print_error(d,true);
+                            self.print_error(d);
                             return None;
                         }
                     },
@@ -711,7 +711,7 @@ impl<'a, 'ctx> Backend<'a, 'ctx> {
                         let d = Diagnostic::<usize>::error()
                             .with_message("Can't Assign to a variable with an void type statement")
                             .with_labels(vec![Label::primary(self.current_file, stat.to_rng())]);
-                            self.print_error(d,true);
+                            self.print_error(d);
                         return None;
                     },
                 }
@@ -734,7 +734,7 @@ impl<'a, 'ctx> Backend<'a, 'ctx> {
                                     .with_labels(vec![Label::primary(self.current_file, stat.to_rng()),
                                     Label::secondary(self.current_file, loc.clone()).with_message(format!("Original Type Assumed here: {}",get_type.unwrap().print_to_string())),
                                     Label::secondary(self.current_file, s.to_rng()).with_message(format!("this returns type: {}",get_type.unwrap().print_to_string()))]);
-                                    self.print_error(d,true);
+                                    self.print_error(d);
                                 }
                             } else {
                                 ty = Some(self.get_type(&s)).unwrap();
@@ -752,7 +752,7 @@ impl<'a, 'ctx> Backend<'a, 'ctx> {
                     let d = Diagnostic::<usize>::error()
                     .with_message("while condition has to be of type i1(bool)")
                     .with_labels(vec![Label::primary(self.current_file, cond.to_rng())]);
-                    self.print_error(d,true);
+                    self.print_error(d);
                 }
                 return self.get_type(&s)
             },
@@ -777,7 +777,7 @@ impl<'a, 'ctx> Backend<'a, 'ctx> {
                 //         .with_message("Return Ty don't match function signature")
                 //         .with_labels(vec![Label::primary(self.current_file, stat.to_rng())])
                 //         .with_notes(vec![format!("function returns type is {}, the return statement type is {}",get_return_type.unwrap().print_to_string(),ty.print_to_string())]);
-                //         self.print_error(d,true);
+                //         self.print_error(d);
                 //     }
                 // }//TODO fix this since coroutines stores return data differently
 
@@ -811,7 +811,7 @@ impl<'a, 'ctx> Backend<'a, 'ctx> {
 
         let d = Diagnostic::<usize>::error()
         .with_message(format!("Can't find type {ty}"));
-        self.print_error(d,true);
+        self.print_error(d);
         panic!();
     }
 
@@ -903,7 +903,7 @@ impl<'a, 'ctx> Backend<'a, 'ctx> {
                         let d = Diagnostic::<usize>::error()
                         .with_message(format!("Function \"{}\" Doesn't have terminator",name))
                         .with_labels(vec![Label::primary(self.current_file, loc)]);
-                        self.print_error(d,true);
+                        self.print_error(d);
                     }
                 };
                 Scope::close_scope(&mut self.current_scope);
@@ -1046,12 +1046,10 @@ impl<'a, 'ctx> Backend<'a, 'ctx> {
         unsafe { CallSiteValue::new(value) }
     }
 
-    fn print_error(&self, d:Diagnostic<usize>, exit: bool){  
+    fn print_error(&self, d:Diagnostic<usize>){  
         let writer = StandardStream::stderr(ColorChoice::Auto);
         let config = codespan_reporting::term::Config::default();
         term::emit(&mut writer.lock(), &config, &self.files, &d).unwrap();
-        if exit{
-            process::exit(1)
-        }
+        process::exit(1)
     }
 }
