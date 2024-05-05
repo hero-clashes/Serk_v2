@@ -697,7 +697,14 @@ impl<'a, 'ctx> Backend<'a, 'ctx> {
             StatementData::Assignment(name, s) => {
                 match self.get_type(&s){
                     Some(s) => {
-                        let basic_type_enum = self.current_scope.as_ref().unwrap().get_value(&name).unwrap().0;
+                        let get_value = self.current_scope.as_ref().unwrap().get_value(&name);
+                        if get_value.is_none() {
+                            let d = Diagnostic::<usize>::error()
+                            .with_message(format!("Can't find variable named: {name}"))
+                            .with_labels(vec![Label::primary(self.current_file, stat.to_rng())]);
+                            self.print_error(d);
+                        }
+                        let basic_type_enum = get_value.unwrap().0;
                         if basic_type_enum != s{
                             let d = Diagnostic::<usize>::error()
                             .with_message("Assign Ty doesn't match the variable ty")
