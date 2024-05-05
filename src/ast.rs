@@ -690,6 +690,7 @@ impl<'a, 'ctx> Backend<'a, 'ctx> {
                         .with_notes(vec![format!("function returns type is {}, the return statement type is {}",get_return_type.map(|s| s.print_to_string().to_string()).unwrap_or("()".to_string()),ty.map(|s| s.print_to_string().to_string()).unwrap_or("()".to_string()))]);
                         self.print_error(d);
                     }
+                    return ty;
                 }
 
 

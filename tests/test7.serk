@@ -1,5 +1,9 @@
 fn main() -> i64{
-        var a = false;
+        var a = if(true){
+                return 10;
+        }else{
+                return 5;
+        }
 
-        return 10;
+        return 0;
 }

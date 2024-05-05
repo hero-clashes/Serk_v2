@@ -7,15 +7,15 @@
         {
             "type": "lldb",
             "request": "launch",
-            "name": "Debug executable 'Serk'",
+            "name": "Debug executable 'serk'",
             "cargo": {
                 "args": [
                     "build",
-                    "--bin=Serk",
-                    "--package=Serk"
+                    "--bin=serk",
+                    "--package=serk"
                 ],
                 "filter": {
-                    "name": "Serk",
+                    "name": "serk",
                     "kind": "bin"
                 }
             },
@@ -25,16 +25,16 @@
         {
             "type": "lldb",
             "request": "launch",
-            "name": "Debug unit tests in executable 'Serk'",
+            "name": "Debug unit tests in executable 'serk'",
             "cargo": {
                 "args": [
                     "test",
                     "--no-run",
-                    "--bin=Serk",
-                    "--package=Serk"
+                    "--bin=serk",
+                    "--package=serk"
                 ],
                 "filter": {
-                    "name": "Serk",
+                    "name": "serk",
                     "kind": "bin"
                 }
             },
