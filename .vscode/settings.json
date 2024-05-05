@@ -5,7 +5,8 @@
         "msvc",
         "Paren",
         "presplitcoroutine",
-        "serk"
+        "serk",
+        "simplifycfg"
     ],
     "rust-analyzer.linkedProjects": [
         ".\\Cargo.toml"

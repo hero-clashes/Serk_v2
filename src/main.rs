@@ -14,12 +14,15 @@ use lexer::Lexer;
 use crate::ast::{Backend, Scope};
 
 use argh::FromArgs;
-#[derive(FromArgs)]
+#[derive(FromArgs,Clone)]
 /// The Serk Complier
 struct Input {
     ///file to be complied/JITed
     #[argh(option, default = "String::from(\"tests/test7.serk\")")]
     pub file: String,
+    ///run Code in Jit Mode
+    #[argh(option, short = 'j', default = "true")]
+    pub jit: bool
 }
 
 fn main() {
@@ -32,7 +35,7 @@ fn main() {
         Ok(s) => {
             // println!("{:?}", s);
             let context = Context::create();
-            let mut module = context.create_module("Hero");
+            let mut module = context.create_module(&cli.file);
             let mut builder = context.create_builder();
             Backend {
                 module: &mut module,
@@ -42,10 +45,11 @@ fn main() {
                 current_file: file_id,
                 files
             }.gen_code(*s);
-            let _ = module.verify().unwrap();
-            let exc = module.create_jit_execution_engine(inkwell::OptimizationLevel::None).unwrap();
-            let func = unsafe { exc.get_function::<unsafe extern "C" fn() -> i64>("Something").unwrap() };
-            println!("output: {:?}, Expected: {}",unsafe{func.call()}, (0..10).sum::<i64>());
+            if cli.jit {
+                let exc = module.create_jit_execution_engine(inkwell::OptimizationLevel::None).unwrap();
+                let func = unsafe { exc.get_function::<unsafe extern "C" fn() -> i64>("main").unwrap() };
+                println!("Main output: {:?}",unsafe{func.call()});
+            }
         }
         Err(s) => {
             println!("Error: {:?}", s);
@@ -59,7 +63,7 @@ fn main() {
         }
     }
 }
-#[allow(clippy::all)]
+#[allow(unused_imports)]
 use goldentests::{TestConfig, TestResult};
 
 #[test]

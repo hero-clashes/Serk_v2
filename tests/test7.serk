@@ -1,5 +1,5 @@
-fn Something(i64 a) -> i64{
+fn main() -> i64{
         var a = false;
 
-        a= 10;
+        return 10;
 }

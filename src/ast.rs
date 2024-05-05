@@ -1,4 +1,4 @@
-use std::{borrow::Cow, collections::HashMap, ffi::{CStr, CString}, mem, ops::Range, process};
+use std::{borrow::Cow, collections::HashMap, ffi::{CStr, CString}, fs, mem, ops::Range, process};
 
 use codespan_reporting::{diagnostic::{Diagnostic, Label}, files::SimpleFiles, term::{self, termcolor::{ColorChoice, StandardStream}}};
 use inkwell::{
@@ -131,8 +131,8 @@ impl<'ctx> Scope<'ctx> {
     fn get_while(&self) -> Option<ScopeTy> {
         let s = &self.ty;
         if let ScopeTy::Loop {
-            cond_block,
-            after_block,
+            cond_block:_,
+            after_block:_,
         } = s
         {
             return Some(s.clone());
@@ -140,7 +140,7 @@ impl<'ctx> Scope<'ctx> {
             let mut current_scope = self;
             while current_scope.parent_scope.is_some() {
                 current_scope = current_scope.parent_scope.as_ref().unwrap();
-                if let ScopeTy::Assign(f) = &current_scope.ty {
+                if let ScopeTy::Assign(_) = &current_scope.ty {
                     return Some(current_scope.ty.clone());
                 }
             }
@@ -219,7 +219,7 @@ pub struct Backend<'a, 'ctx> {
 impl<'a, 'ctx> Backend<'a, 'ctx> {
     pub fn get_value(&mut self, stat: &Statement) -> Option<BasicValueEnum<'ctx>> {
         match &stat.data {
-            StatementData::VariableDecl(n, t, s) => {
+            StatementData::VariableDecl(n, _, s) => {
                 let ty = self.get_type(&stat).unwrap();
                 let alloc = self.builder.build_alloca(ty, &n).unwrap();
 
@@ -402,7 +402,7 @@ impl<'a, 'ctx> Backend<'a, 'ctx> {
                             .unwrap();
                     }
                 }else{
-                    self.builder.build_return(None);
+                    self.builder.build_return(None).unwrap();
                 }
                 None
             }
@@ -510,7 +510,7 @@ impl<'a, 'ctx> Backend<'a, 'ctx> {
             }
             StatementData::Break => {
                 if let ScopeTy::Loop {
-                    cond_block,
+                    cond_block:_,
                     after_block,
                 } = self.current_scope.as_ref().unwrap().get_while().unwrap()
                 {
@@ -526,7 +526,7 @@ impl<'a, 'ctx> Backend<'a, 'ctx> {
             StatementData::Continue => {
                 if let ScopeTy::Loop {
                     cond_block,
-                    after_block,
+                    after_block:_,
                 } = self.current_scope.as_ref().unwrap().get_while().unwrap()
                 {
                     self.builder.build_unconditional_branch(cond_block).unwrap();
@@ -554,10 +554,10 @@ impl<'a, 'ctx> Backend<'a, 'ctx> {
 
                 if let Some(s) = s{
                     let value = self.get_value(&s).unwrap();
-                    let GenFunction { co_suspend, suspend_block, cleanup_block, promise } = self.current_scope.as_ref().unwrap().get_gen_function().unwrap();
+                    let GenFunction { co_suspend:_, suspend_block:_, cleanup_block:_, promise } = self.current_scope.as_ref().unwrap().get_gen_function().unwrap();
                     self.builder.build_store(promise, value).unwrap();
                 }
-                let GenFunction { co_suspend, suspend_block, cleanup_block, promise } = self.current_scope.as_ref().unwrap().get_gen_function().unwrap();
+                let GenFunction { co_suspend, suspend_block, cleanup_block, promise:_ } = self.current_scope.as_ref().unwrap().get_gen_function().unwrap();
 
                 let next_block = self.context.append_basic_block(current_func, "next_block");
                 let token_none = unsafe { LLVMConstNull(LLVMTokenTypeInContext(self.context.as_ctx_ref())) };
@@ -625,7 +625,7 @@ impl<'a, 'ctx> Backend<'a, 'ctx> {
                 }
                 Some(assign_ty)
             }
-            StatementData::Math(l, op, r) => {
+            StatementData::Math(l, _, r) => {
                 let l_ty = self.get_type(&l).unwrap();
                 let r_ty = self.get_type(&r).unwrap();
                 if l_ty == r_ty {
@@ -672,7 +672,7 @@ impl<'a, 'ctx> Backend<'a, 'ctx> {
                 
                 let get_return_type = f.get_type().get_return_type();
 
-                if let Some(s) = s{
+                if let Some(_) = s{
                     
                     if get_return_type != ty{
                         let d = Diagnostic::<usize>::error()
@@ -712,8 +712,6 @@ impl<'a, 'ctx> Backend<'a, 'ctx> {
                             .with_message("Can't Assign to a variable with an void type statement")
                             .with_labels(vec![Label::primary(self.current_file, stat.to_rng())]);
                             self.print_error(d,true);
-                            return None;
-
                         return None;
                     },
                 }
@@ -768,7 +766,7 @@ impl<'a, 'ctx> Backend<'a, 'ctx> {
                     .get_return_type()
                     .unwrap(),
             ),
-            StatementData::Yield(s) => {
+            StatementData::Yield(_) => {
                 // if let Some(s) = s{
                 //     let f = self.current_scope.as_ref().unwrap().get_function().unwrap();
                 //     let ty = self.get_type(&s).unwrap();
@@ -844,6 +842,32 @@ impl<'a, 'ctx> Backend<'a, 'ctx> {
     pub fn gen_code(&mut self, ast: AST) {
         let loc = ast.to_rng();
         match ast.data {
+            ASTData::Module(l) => {
+                let _malloc = self.module.add_function("malloc", self.context.i8_type().ptr_type(AddressSpace::default()).fn_type(&[self.context.i64_type().into()], false), None);
+                Target::initialize_x86(&InitializationConfig::default());
+                let get_default_triple = TargetMachine::get_default_triple();
+                let target_machine: TargetMachine = Target::from_triple(&get_default_triple).unwrap().create_target_machine(
+                        &get_default_triple,
+                        "",
+                        "",
+                        inkwell::OptimizationLevel::None,
+                        inkwell::targets::RelocMode::Default,
+                        inkwell::targets::CodeModel::JITDefault
+                    )
+                    .unwrap();                
+                let options = PassBuilderOptions::create();
+                self.module.set_triple(&get_default_triple);
+                self.module.set_data_layout(&target_machine.get_target_data().get_data_layout());
+                for ast in l {
+                    self.gen_code(*ast);
+
+                }
+                let before = self.module.print_to_string().to_string();
+                self.module.run_passes("coro-early,coro-split,coro-elide,coro-cleanup,reassociate,instcombine,simplifycfg,mem2reg,gvn,lint", &target_machine, options).unwrap();
+                let after = self.module.print_to_string().to_string();
+                let _ = fs::write("output.ir", format!("\\\\-----Before Optimization----\n\n\n{before}\n\n\n\n\\\\-----After Optimization----\n\n\n{after}"));
+                let _ = self.module.verify().unwrap();   
+            }
             ASTData::Function(name, ty_name, args, stats) => {
                 let ty = self.convert_type_to_func(&ty_name, &args);
                 let func = self.module.add_function(&name, ty, None);
@@ -884,32 +908,6 @@ impl<'a, 'ctx> Backend<'a, 'ctx> {
                 };
                 Scope::close_scope(&mut self.current_scope);
                 func.verify(true);
-            }
-            ASTData::Module(l) => {
-                let malloc = self.module.add_function("malloc", self.context.i8_type().ptr_type(AddressSpace::default()).fn_type(&[self.context.i64_type().into()], false), None);
-                Target::initialize_x86(&InitializationConfig::default());
-                let get_default_triple = TargetMachine::get_default_triple();
-                let target_machine: TargetMachine = Target::from_triple(&get_default_triple).unwrap().create_target_machine(
-                        &get_default_triple,
-                        "",
-                        "",
-                        inkwell::OptimizationLevel::None,
-                        inkwell::targets::RelocMode::Default,
-                        inkwell::targets::CodeModel::JITDefault
-                    )
-                    .unwrap();                
-                let options = PassBuilderOptions::create();
-                self.module.set_triple(&get_default_triple);
-                self.module.set_data_layout(&target_machine.get_target_data().get_data_layout());
-                for ast in l {
-                    self.gen_code(*ast);
-
-                }
-                self.module.print_to_file("a.ir");
-            
-                self.module.run_passes("coro-early,coro-split,coro-elide,coro-cleanup,reassociate,instcombine,simplifycfg,mem2reg,gvn,lint", &target_machine, options).unwrap();
-                self.module.print_to_file("b.ir");
-   
             }
             ASTData::GenFunction(f) => {
                 if let ASTData::Function(name, ty_name, args, stats) = *f {
