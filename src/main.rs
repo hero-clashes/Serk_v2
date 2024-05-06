@@ -1,7 +1,11 @@
 pub mod ast;
 pub mod lexer;
+pub mod scope;
+pub mod statement;
+pub mod backend;
 use std::fs;
 
+use backend::Backend;
 use codespan_reporting::files::SimpleFiles;
 use lalrpop_util::{lalrpop_mod, ParseError::{ExtraToken, InvalidToken, UnrecognizedEof, UnrecognizedToken, User}};
 
@@ -10,8 +14,8 @@ use inkwell::
     context::Context
 ;
 use lexer::Lexer;
+use scope::Scope;
 
-use crate::ast::{Backend, Scope};
 
 use argh::FromArgs;
 #[derive(FromArgs,Clone)]

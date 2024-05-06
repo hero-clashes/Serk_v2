@@ -1,7 +1,5 @@
-use crate::ast::AST;
-use crate::ast::ASTData;
-use crate::ast::Statement;
-use crate::ast::StatementData;
+use crate::ast::*;
+use crate::statement::*;
 use crate::lexer::*;
 grammar;
 
