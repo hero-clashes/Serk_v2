@@ -2,8 +2,9 @@
 use std::ops::Range;
 
 use codespan_reporting::diagnostic::{Diagnostic, Label};
-use inkwell::
-    types::{BasicType, BasicTypeEnum, FunctionType}
+use enum_as_inner::EnumAsInner;
+use inkwell::{
+    types::{BasicType, BasicTypeEnum, FunctionType}, values::{BasicValueEnum, FunctionValue}}
 ;
 
 use once_cell::sync::Lazy;
@@ -11,12 +12,24 @@ use regex::Regex;
 
 use crate::statement::*;
 use super::Backend;
+#[derive(EnumAsInner)]
+pub enum Decl<'ctx> {
+    VariableDecl{ty: BasicTypeEnum<'ctx>, val: Option<BasicValueEnum<'ctx>>},
+    FunctionDecl{val: FunctionValue<'ctx>, args: Vec<BasicTypeEnum<'ctx>>, return_ty: BasicTypeEnum<'ctx>, coroutine:bool},
+    ClassDecl {
+        ty: BasicTypeEnum<'ctx>,
+        members: Vec<(String, BasicTypeEnum<'ctx>)>,
+        f_members: Vec<Decl<'ctx>>,
+    },
+}
+
+
 
 static INT_TYPE: Lazy<Regex> = Lazy::new(|| Regex::new(r"[ui]([0-9]+)").unwrap());
 static FLOAT_TYPE: Lazy<Regex> = Lazy::new(|| Regex::new(r"f([0-9]+)").unwrap());
 
 impl<'a, 'ctx> Backend<'a, 'ctx> {
-    pub fn get_type(&self, stat: &Statement) -> Option<BasicTypeEnum<'ctx>> {
+    pub fn get_type(&'ctx self, stat: &Statement) -> Option<BasicTypeEnum<'ctx>> {
         match &stat.data {
             StatementData::VariableDecl(_, ty, assignments) => {
                 let def_ty = if let Some(t) = ty {
@@ -101,31 +114,35 @@ impl<'a, 'ctx> Backend<'a, 'ctx> {
                 None
             },
             StatementData::Identifier(idenf) => Some(
-                self.current_scope
+                match self.current_scope
                     .as_ref()
                     .unwrap()
                     .get_value(&idenf)
-                    .unwrap()
-                    .0,
+                    .unwrap(){
+                        Decl::VariableDecl { ty, val } => ty.clone(),
+                        Decl::FunctionDecl { val, args, return_ty, coroutine } => return_ty.clone(),
+                        Decl::ClassDecl { ty, members, f_members } => ty.clone(),
+                    }
             ),
             StatementData::Assignment(name, s) => {
                 match self.get_type(&s){
                     Some(s) => {
                         let get_value = self.current_scope.as_ref().unwrap().get_value(&name);
-                        if get_value.is_none() {
+                        if get_value.is_none() || matches!(get_value.unwrap(), Decl::VariableDecl { ty, val }){
                             let d = Diagnostic::<usize>::error()
                             .with_message(format!("Can't find variable named: {name}"))
                             .with_labels(vec![Label::primary(self.current_file, stat.to_rng())]);
                             self.print_error(d);
                         }
-                        let basic_type_enum = get_value.unwrap().0;
-                        if basic_type_enum != s{
-                            let d = Diagnostic::<usize>::error()
-                            .with_message("Assign Ty doesn't match the variable ty")
-                            .with_labels(vec![Label::primary(self.current_file, stat.to_rng())])
-                            .with_notes(vec![format!("Variable type is {}, the return statement type is {}",basic_type_enum.print_to_string(),s.print_to_string())]);
-                            self.print_error(d);
-                        }
+                        if let Decl::VariableDecl{ty: basic_type_enum,val: _} = get_value.unwrap(){
+                            if *basic_type_enum != s{
+                                let d = Diagnostic::<usize>::error()
+                                .with_message("Assign Ty doesn't match the variable ty")
+                                .with_labels(vec![Label::primary(self.current_file, stat.to_rng())])
+                                .with_notes(vec![format!("Variable type is {}, the return statement type is {}",basic_type_enum.print_to_string(),s.print_to_string())]);
+                                self.print_error(d);
+                            }
+                        }else{};                       
                     },
                     None => {
                         let d = Diagnostic::<usize>::error()

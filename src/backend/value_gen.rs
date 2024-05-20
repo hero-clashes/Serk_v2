@@ -1,15 +1,25 @@
+use std::{
+    borrow::Cow,
+    ffi::{CStr, CString},
+};
 
-use std::{borrow::Cow, ffi::{CStr, CString}};
-
+use super::{type_gen::Decl, Backend};
+use crate::{scope::*, statement::*};
 use codespan_reporting::diagnostic::{Diagnostic, Label};
 use inkwell::{
-    context::AsContextRef, intrinsics::Intrinsic, llvm_sys::{core::{LLVMBuildCall2, LLVMConstNull, LLVMTokenTypeInContext}, prelude::LLVMValueRef}, types::AsTypeRef, values::{
-        AnyValue, AsValueRef, BasicMetadataValueEnum, BasicValue, BasicValueEnum::{self, PointerValue}, CallSiteValue, FunctionValue
-    }
+    context::AsContextRef,
+    intrinsics::Intrinsic,
+    llvm_sys::{
+        core::{LLVMBuildCall2, LLVMConstNull, LLVMTokenTypeInContext},
+        prelude::LLVMValueRef,
+    },
+    types::AsTypeRef,
+    values::{
+        AnyValue, AsValueRef, BasicMetadataValueEnum, BasicValue,
+        BasicValueEnum::{self, PointerValue},
+        CallSiteValue, FunctionValue,
+    },
 };
-use crate::{scope::*, statement::*};
-use super::Backend;
-
 
 
 impl<'a, 'ctx> Backend<'a, 'ctx> {
@@ -24,8 +34,7 @@ impl<'a, 'ctx> Backend<'a, 'ctx> {
 
                 self.current_scope.as_mut().unwrap().set_value(
                     n.to_string(),
-                    ty,
-                    PointerValue(alloc),
+                    Decl::VariableDecl { ty, val: Some(PointerValue(alloc).as_basic_value_enum()) }
                 );
                 Some(BasicValueEnum::PointerValue(alloc))
             }
@@ -177,7 +186,7 @@ impl<'a, 'ctx> Backend<'a, 'ctx> {
                 None
             }
             StatementData::Return(s) => {
-                if let Some(s) = s{
+                if let Some(s) = s {
                     let get_value = self.get_value(&s).unwrap();
 
                     let get_assign = &self.current_scope.as_ref().unwrap().get_assign();
@@ -191,35 +200,40 @@ impl<'a, 'ctx> Backend<'a, 'ctx> {
                                     .unwrap()
                                     .get_value(get_assign.as_ref().unwrap())
                                     .unwrap()
+                                    .as_variable_decl()
+                                    .unwrap()
                                     .1
+                                    .unwrap()
                                     .into_pointer_value(),
                                 get_value,
                             )
                             .unwrap();
                     }
-                }else{
+                } else {
                     self.builder.build_return(None).unwrap();
                 }
                 None
             }
             StatementData::Identifier(name) => {
-                let (ty, mut val) = *self
+                let (ty, mut val) = self
                     .current_scope
                     .as_ref()
                     .unwrap()
                     .get_value(&name)
-                    .unwrap();
-                if !ty.is_pointer_type() && val.get_type().is_pointer_type() {
-                    val = self
+                    .unwrap().as_variable_decl().unwrap();
+                
+                if !ty.is_pointer_type() && val.unwrap().get_type().is_pointer_type() {
+                    return Some(self
                         .builder
-                        .build_load(ty, val.into_pointer_value(), "load")
-                        .unwrap();
+                        .build_load(*ty, val.unwrap().into_pointer_value(), "load")
+                        .unwrap());
+                }else{
+                    return Some(val.unwrap())
                 }
-                Some(val)
             }
             StatementData::Assignment(name, s) => {
                 Scope::open_scope(&mut self.current_scope, ScopeTy::Assign(name.to_string()));
-                let val  = self.get_value(&s).unwrap();
+                let val = self.get_value(&s).unwrap();
                 self.builder
                     .build_store(
                         self.current_scope
@@ -227,7 +241,7 @@ impl<'a, 'ctx> Backend<'a, 'ctx> {
                             .unwrap()
                             .get_value(&name)
                             .unwrap()
-                            .1
+                            .as_variable_decl().unwrap().1.unwrap()
                             .into_pointer_value(),
                         val,
                     )
@@ -274,10 +288,10 @@ impl<'a, 'ctx> Backend<'a, 'ctx> {
                 }
                 _ => {
                     let d = Diagnostic::<usize>::error()
-                    .with_message(format!("Unknown Prefix Operator: \"{p}\""))
-                    .with_labels(vec![Label::primary(self.current_file, stat.to_rng())]);
+                        .with_message(format!("Unknown Prefix Operator: \"{p}\""))
+                        .with_labels(vec![Label::primary(self.current_file, stat.to_rng())]);
                     self.print_error(d);
-                },
+                }
             },
             StatementData::While(cond, stats) => {
                 let function = self.current_scope.as_ref().unwrap().get_function().unwrap();
@@ -311,7 +325,7 @@ impl<'a, 'ctx> Backend<'a, 'ctx> {
             }
             StatementData::Break => {
                 if let ScopeTy::Loop {
-                    cond_block:_,
+                    cond_block: _,
                     after_block,
                 } = self.current_scope.as_ref().unwrap().get_while().unwrap()
                 {
@@ -320,8 +334,8 @@ impl<'a, 'ctx> Backend<'a, 'ctx> {
                         .unwrap();
                 } else {
                     let d = Diagnostic::<usize>::error()
-                    .with_message("can't use Break outside of While loop")
-                    .with_labels(vec![Label::primary(self.current_file, stat.to_rng())]);
+                        .with_message("can't use Break outside of While loop")
+                        .with_labels(vec![Label::primary(self.current_file, stat.to_rng())]);
                     self.print_error(d);
                 };
 
@@ -330,14 +344,14 @@ impl<'a, 'ctx> Backend<'a, 'ctx> {
             StatementData::Continue => {
                 if let ScopeTy::Loop {
                     cond_block,
-                    after_block:_,
+                    after_block: _,
                 } = self.current_scope.as_ref().unwrap().get_while().unwrap()
                 {
                     self.builder.build_unconditional_branch(cond_block).unwrap();
                 } else {
                     let d = Diagnostic::<usize>::error()
-                    .with_message("can't use Continue outside of While loop")
-                    .with_labels(vec![Label::primary(self.current_file, stat.to_rng())]);
+                        .with_message("can't use Continue outside of While loop")
+                        .with_labels(vec![Label::primary(self.current_file, stat.to_rng())]);
                     self.print_error(d);
                 };
 
@@ -359,62 +373,145 @@ impl<'a, 'ctx> Backend<'a, 'ctx> {
             StatementData::Yield(s) => {
                 let current_func = self.current_scope.as_ref().unwrap().get_function().unwrap();
 
-                if let Some(s) = s{
+                if let Some(s) = s {
                     let value = self.get_value(&s).unwrap();
-                    let GenFunction { co_suspend:_, suspend_block:_, cleanup_block:_, promise } = self.current_scope.as_ref().unwrap().get_gen_function().unwrap();
+                    let GenFunction {
+                        co_suspend: _,
+                        suspend_block: _,
+                        cleanup_block: _,
+                        promise,
+                    } = self
+                        .current_scope
+                        .as_ref()
+                        .unwrap()
+                        .get_gen_function()
+                        .unwrap();
                     self.builder.build_store(promise, value).unwrap();
                 }
-                let GenFunction { co_suspend, suspend_block, cleanup_block, promise:_ } = self.current_scope.as_ref().unwrap().get_gen_function().unwrap();
+                let GenFunction {
+                    co_suspend,
+                    suspend_block,
+                    cleanup_block,
+                    promise: _,
+                } = self
+                    .current_scope
+                    .as_ref()
+                    .unwrap()
+                    .get_gen_function()
+                    .unwrap();
 
                 let next_block = self.context.append_basic_block(current_func, "next_block");
-                let token_none = unsafe { LLVMConstNull(LLVMTokenTypeInContext(self.context.as_ctx_ref())) };
-                
-                let ch = self.manual_call(co_suspend, vec![token_none,self.context.bool_type().const_int(0, false).as_value_ref()], "ch".to_string());
+                let token_none =
+                    unsafe { LLVMConstNull(LLVMTokenTypeInContext(self.context.as_ctx_ref())) };
+
+                let ch = self.manual_call(
+                    co_suspend,
+                    vec![
+                        token_none,
+                        self.context.bool_type().const_int(0, false).as_value_ref(),
+                    ],
+                    "ch".to_string(),
+                );
                 let i8t = self.context.i8_type();
-                self.builder.build_switch(ch.as_any_value_enum().into_int_value(), suspend_block, &[(i8t.const_int(0, false),next_block),(i8t.const_int(1, false),cleanup_block)]).unwrap();
+                self.builder
+                    .build_switch(
+                        ch.as_any_value_enum().into_int_value(),
+                        suspend_block,
+                        &[
+                            (i8t.const_int(0, false), next_block),
+                            (i8t.const_int(1, false), cleanup_block),
+                        ],
+                    )
+                    .unwrap();
                 self.builder.position_at_end(next_block);
                 None
             }
             StatementData::For(var, func_name, stats) => {
-                let pr = |module,s|->FunctionValue  {Intrinsic::find(s)
-                    .unwrap()
-                    .get_declaration(module, &[])
-                    .unwrap()};
-                
+                let pr = |module, s| -> FunctionValue {
+                    Intrinsic::find(s)
+                        .unwrap()
+                        .get_declaration(module, &[])
+                        .unwrap()
+                };
+
                 let func = self.current_scope.as_ref().unwrap().get_function().unwrap();
                 let hdl = self.get_value(&func_name).unwrap();
-                let value = self.builder.build_call((|module,s|->FunctionValue  {Intrinsic::find(s)
+                let value = self
+                    .builder
+                    .build_call(
+                        (|module, s| -> FunctionValue {
+                            Intrinsic::find(s)
+                                .unwrap()
+                                .get_declaration(module, &[])
+                                .unwrap()
+                        })(self.module, "llvm.coro.promise"),
+                        &[
+                            hdl.as_basic_value_enum().into(),
+                            self.context.i32_type().const_int(8, false).into(),
+                            self.context.bool_type().const_int(0, false).into(),
+                        ],
+                        "promise_addr",
+                    )
                     .unwrap()
-                    .get_declaration(module, &[])
-                    .unwrap()})(self.module, "llvm.coro.promise"), &[hdl.as_basic_value_enum().into(), self.context.i32_type().const_int(8, false).into(), self.context.bool_type().const_int(0, false).into()], "promise_addr").unwrap().try_as_basic_value().left().unwrap();
+                    .try_as_basic_value()
+                    .left()
+                    .unwrap();
                 let ty = self.convert_type(&"i64".to_owned());
-                self.current_scope.as_mut().unwrap().set_value(var.to_string(), ty, value); //TODO implement type
+                self.current_scope
+                    .as_mut()
+                    .unwrap()
+                    .set_value(var.to_string(), Decl::VariableDecl { ty, val: Some(value) }); //TODO implement type
                 let loop_block = self.context.append_basic_block(func, "for_block");
-                let after_block= self.context.append_basic_block(func, "after_for");
+                let after_block = self.context.append_basic_block(func, "after_for");
                 self.builder.build_unconditional_branch(loop_block).unwrap();
                 self.builder.position_at_end(loop_block);
                 self.get_value(&stats);
-                
-                self.manual_call(pr(self.module,"llvm.coro.resume"), vec![hdl.as_value_ref()], "".to_owned());
-                let done = self.manual_call(pr(self.module,"llvm.coro.done"), vec![hdl.as_value_ref()], "done".to_owned());
 
-                self.builder.build_conditional_branch(done.as_any_value_enum().into_int_value(), after_block, loop_block).unwrap();
+                self.manual_call(
+                    pr(self.module, "llvm.coro.resume"),
+                    vec![hdl.as_value_ref()],
+                    "".to_owned(),
+                );
+                let done = self.manual_call(
+                    pr(self.module, "llvm.coro.done"),
+                    vec![hdl.as_value_ref()],
+                    "done".to_owned(),
+                );
+
+                self.builder
+                    .build_conditional_branch(
+                        done.as_any_value_enum().into_int_value(),
+                        after_block,
+                        loop_block,
+                    )
+                    .unwrap();
                 self.builder.position_at_end(after_block);
-                self.manual_call(pr(self.module,"llvm.coro.destroy"), vec![hdl.as_value_ref()], "".to_owned());
-
+                self.manual_call(
+                    pr(self.module, "llvm.coro.destroy"),
+                    vec![hdl.as_value_ref()],
+                    "".to_owned(),
+                );
 
                 None
-            },
+            }
         }
     }
 
-
-    pub fn manual_call(&self,s:FunctionValue,mut arg: Vec<LLVMValueRef>, name:String) -> CallSiteValue<'ctx>  {
+    pub fn manual_call(
+        &self,
+        s: FunctionValue,
+        mut arg: Vec<LLVMValueRef>,
+        name: String,
+    ) -> CallSiteValue<'ctx> {
         let fn_ty_ref = s.get_type().as_type_ref();
-        let to_c_str = |s:String| {   if !s.chars().rev().any(|ch| ch == '\0') {
-            return Cow::from(CString::new(s).expect("unreachable since null bytes are checked"));
-        }
-        unsafe { Cow::from(CStr::from_ptr(s.as_ptr() as *const _)) }};
+        let to_c_str = |s: String| {
+            if !s.chars().rev().any(|ch| ch == '\0') {
+                return Cow::from(
+                    CString::new(s).expect("unreachable since null bytes are checked"),
+                );
+            }
+            unsafe { Cow::from(CStr::from_ptr(s.as_ptr() as *const _)) }
+        };
         let c_string = to_c_str(name);
 
         let value = unsafe {

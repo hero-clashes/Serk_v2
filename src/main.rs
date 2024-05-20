@@ -10,8 +10,8 @@ use codespan_reporting::files::SimpleFiles;
 use lalrpop_util::{lalrpop_mod, ParseError::{ExtraToken, InvalidToken, UnrecognizedEof, UnrecognizedToken, User}};
 
 lalrpop_mod!(pub grammer);
-use inkwell::
-    context::Context
+use inkwell::{
+    context::Context, targets::{InitializationConfig, Target, TargetMachine}}
 ;
 use lexer::Lexer;
 use scope::Scope;
@@ -41,13 +41,27 @@ fn main() {
             let context = Context::create();
             let mut module = context.create_module(&cli.file);
             let mut builder = context.create_builder();
+            Target::initialize_x86(&InitializationConfig::default());
+            let get_default_triple = TargetMachine::get_default_triple();
+            let target_machine: TargetMachine = Target::from_triple(&get_default_triple)
+                .unwrap()
+                .create_target_machine(
+                    &get_default_triple,
+                    "",
+                    "",
+                    inkwell::OptimizationLevel::None,
+                    inkwell::targets::RelocMode::Default,
+                    inkwell::targets::CodeModel::JITDefault,
+                )
+                .unwrap();
             Backend {
                 module: &mut module,
                 context: &context,
                 builder: &mut builder,
                 current_scope: Some(Box::new(Scope::default())),
                 current_file: file_id,
-                files
+                files,
+                target_machine
             }.gen_code(*s);
             if cli.jit {
                 let exc = module.create_jit_execution_engine(inkwell::OptimizationLevel::None).unwrap();

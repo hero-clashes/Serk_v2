@@ -8,6 +8,8 @@ use std::mem;
 use inkwell::basic_block::BasicBlock;
 use inkwell::values::PointerValue as Op;
 
+use crate::backend::type_gen::Decl;
+
 #[derive(Clone)]
 pub struct GenFunction<'ctx> {
     pub co_suspend: FunctionValue<'ctx>,
@@ -32,7 +34,7 @@ pub enum ScopeTy<'ctx> {
 #[derive(Default)]
 pub struct Scope<'ctx> {
     pub(crate) parent_scope: Option<Box<Scope<'ctx>>>,
-    pub(crate) defs: HashMap<String, (BasicTypeEnum<'ctx>, BasicValueEnum<'ctx>)>,
+    pub(crate) defs: HashMap<String, Decl<'ctx>>,
     pub(crate) ty: ScopeTy<'ctx>,
     pub current_func: Option<FunctionValue<'ctx>>,
 }
@@ -60,7 +62,7 @@ impl<'ctx> Scope<'ctx> {
     pub(crate) fn get_value(
         &self,
         name: &String,
-    ) -> Option<&(BasicTypeEnum<'ctx>, BasicValueEnum<'ctx>)> {
+    ) -> Option<&Decl> {
         let s = self.defs.get(name);
         if s.is_some() {
             return s;
@@ -81,10 +83,9 @@ impl<'ctx> Scope<'ctx> {
     pub(crate) fn set_value(
         &mut self,
         name: String,
-        ty: BasicTypeEnum<'ctx>,
-        value: BasicValueEnum<'ctx>,
+        decl: Decl<'ctx>
     ) -> bool {
-        self.defs.insert(name, (ty, value)).is_some()
+        self.defs.insert(name, decl).is_some()
     }
 
     pub(crate) fn get_function(&self) -> Option<FunctionValue<'ctx>> {
